@@ -5,52 +5,68 @@ let makeResult = (isOk, message) => {
 	}
 }
 
-// Builds an empty inventory in which every space holds no products. A space holds a list of entries, one per product, each with its own batches.
-let makeEmptyState = () => {
-	let racks = []
+let makeRack = (name, levelCount, bayCount) => {
+	let spaces = []
 
-	for (let rackIndex = 0; rackIndex < rackCount; rackIndex++) {
-		let spaces = []
-
-		for (let spaceIndex = 0; spaceIndex < levelCount * bayCount; spaceIndex++) {
-			spaces.push({
-				entries: []
-			})
-		}
-
-		racks.push({
-			spaces: spaces
+	for (let spaceIndex = 0; spaceIndex < levelCount * bayCount; spaceIndex++) {
+		spaces.push({
+			entries: [],
+			isUnfinished: false,
+			isUnavailable: false
 		})
 	}
 
 	return {
+		name: name,
+		levelCount: levelCount,
+		bayCount: bayCount,
+		spaces: spaces
+	}
+}
+
+// Builds an empty inventory with one default rack. A space holds a list of entries, one per product, each with its own batches.
+let makeEmptyState = () => {
+	return {
 		version: storageVersion,
 		nextProductId: 1,
 		products: [],
-		racks: racks,
+		racks: [makeRack(`Rack 1`, defaultLevelCount, defaultBayCount)],
 		savedAtMillis: null
 	}
 }
 
-// Brings version 1 data (one productId plus batches per space) up to version 2 (a list of entries per space). Anything else is returned unchanged for the validator to judge.
+// Brings older saved data up to the current layout. Version 1 spaces held one product (productId plus batches), version 2 spaces hold a list of entries, and version 3 racks have a name and their own size. Versions 1 and 2 always had two unnamed racks of 4 levels and 4 bays. Anything else is returned unchanged for the validator to judge.
 let upgradeState = (data) => {
-	if (!data || typeof data !== `object` || data.version !== 1 || !Array.isArray(data.racks)) return data
+	if (!data || typeof data !== `object` || !Array.isArray(data.racks)) return data
 
-	data.racks.forEach(rack => {
-		if (!rack || !Array.isArray(rack.spaces)) return
+	if (data.version === 1) {
+		data.racks.forEach(rack => {
+			if (!rack || !Array.isArray(rack.spaces)) return
 
-		rack.spaces = rack.spaces.map(space => {
-			let hasProduct = space && space.productId !== null && space.productId !== undefined
+			rack.spaces = rack.spaces.map(space => {
+				let hasProduct = space && space.productId !== null && space.productId !== undefined
 
-			return {
-				entries: hasProduct ? [{
-					productId: space.productId,
-					batches: space.batches
-				}] : []
-			}
+				return {
+					entries: hasProduct ? [{
+						productId: space.productId,
+						batches: space.batches
+					}] : []
+				}
+			})
 		})
-	})
-	data.version = storageVersion
+		data.version = 2
+	}
+
+	if (data.version === 2) {
+		data.racks.forEach((rack, rackIndex) => {
+			if (!rack || typeof rack !== `object`) return
+
+			rack.name = `Rack ${rackIndex + 1}`
+			rack.levelCount = 4
+			rack.bayCount = 4
+		})
+		data.version = 3
+	}
 
 	return data
 }
@@ -60,6 +76,52 @@ let findProduct = (state, productId) => state.products.find(product => product.i
 let getSpace = (state, rackIndex, spaceIndex) => state.racks[rackIndex].spaces[spaceIndex]
 
 let findEntry = (space, productId) => space.entries.find(entry => entry.productId === productId) || null
+
+let isValidSideCount = (sideCount) => Number.isInteger(sideCount) && sideCount >= 1 && sideCount <= maxRackSideCount
+
+let isRackNameTaken = (state, name, ignoredRackIndex) => state.racks.some((rack, rackIndex) => rackIndex !== ignoredRackIndex && rack.name.toLowerCase() === name.toLowerCase())
+
+let suggestRackName = (state) => {
+	let rackNumber = state.racks.length + 1
+
+	while (isRackNameTaken(state, `Rack ${rackNumber}`, -1)) rackNumber++
+
+	return `Rack ${rackNumber}`
+}
+
+// The size of a rack is fixed when it is added, because shrinking a rack could silently delete stock.
+let addRack = (state, rawName, levelCount, bayCount) => {
+	let name = rawName.trim()
+
+	if (name === ``) return makeResult(false, `Enter a rack name.`)
+	if (isRackNameTaken(state, name, -1)) return makeResult(false, `A rack with that name already exists.`)
+	if (!isValidSideCount(levelCount) || !isValidSideCount(bayCount)) return makeResult(false, `Bays and levels must be whole numbers from 1 to ${maxRackSideCount}.`)
+
+	state.racks.push(makeRack(name, levelCount, bayCount))
+
+	return makeResult(true, ``)
+}
+
+let renameRack = (state, rackIndex, rawName) => {
+	let name = rawName.trim()
+
+	if (name === ``) return makeResult(false, `Enter a rack name.`)
+	if (isRackNameTaken(state, name, rackIndex)) return makeResult(false, `A rack with that name already exists.`)
+
+	state.racks[rackIndex].name = name
+
+	return makeResult(true, ``)
+}
+
+// The last rack cannot be removed, and a rack that still holds products cannot be removed, so stock is never deleted by accident.
+let removeRack = (state, rackIndex) => {
+	if (state.racks.length === 1) return makeResult(false, `You need at least one rack.`)
+	if (state.racks[rackIndex].spaces.some(space => space.entries.length > 0)) return makeResult(false, `This rack still holds products. Empty its spaces first.`)
+
+	state.racks.splice(rackIndex, 1)
+
+	return makeResult(true, ``)
+}
 
 let isNameTaken = (state, name, ignoredProductId) => state.products.some(product => product.id !== ignoredProductId && product.name.toLowerCase() === name.toLowerCase())
 
@@ -105,12 +167,12 @@ let setProductColour = (state, productId, colour) => {
 	return makeResult(true, ``)
 }
 
-// A product that is still in any space cannot be removed, so no entry is ever left pointing at a missing product.
 let makeBoxCountText = (boxCount) => `${boxCount} ${boxCount === 1 ? `box` : `boxes`}`
 
 // Plain wording for a number of spaces, so one space is never written as 1 spaces.
 let makeSpaceCountText = (spaceCount) => `${spaceCount} ${spaceCount === 1 ? `space` : `spaces`}`
 
+// A product that is still in any space cannot be removed, so no entry is ever left pointing at a missing product.
 let removeProduct = (state, productId) => {
 	let spaceCount = 0
 
@@ -128,6 +190,7 @@ let removeProduct = (state, productId) => {
 let addProductToSpace = (state, rackIndex, spaceIndex, productId) => {
 	let space = getSpace(state, rackIndex, spaceIndex)
 
+	if (space.isUnavailable === true) return makeResult(false, `This location is unavailable.`)
 	if (findProduct(state, productId) === null) return makeResult(false, `Choose a product.`)
 	if (findEntry(space, productId) !== null) return makeResult(false, `That product is already in this space.`)
 
@@ -161,6 +224,17 @@ let setSpaceUnfinished = (state, rackIndex, spaceIndex, isUnfinished) => {
 	if (space.entries.length === 0) return makeResult(false, `Add a product first.`)
 
 	space.isUnfinished = isUnfinished === true
+
+	return makeResult(true, ``)
+}
+
+// An unavailable location is hidden from the overview. It can only be marked while empty, so hidden stock is impossible.
+let setSpaceUnavailable = (state, rackIndex, spaceIndex, isUnavailable) => {
+	let space = getSpace(state, rackIndex, spaceIndex)
+
+	if (isUnavailable === true && space.entries.length > 0) return makeResult(false, `Empty this space first.`)
+
+	space.isUnavailable = isUnavailable === true
 
 	return makeResult(true, ``)
 }
@@ -202,7 +276,11 @@ let determineSpaceStatus = (space) => {
 	return `stocked`
 }
 
-let makeSpaceLabel = (rackIndex, spaceIndex) => `Rack ${rackIndex + 1}, level ${Math.floor(spaceIndex / bayCount) + 1}, bay ${(spaceIndex % bayCount) + 1}`
+let makeSpaceLabel = (state, rackIndex, spaceIndex) => {
+	let rack = state.racks[rackIndex]
+
+	return `${rack.name}, level ${Math.floor(spaceIndex / rack.bayCount) + 1}, bay ${(spaceIndex % rack.bayCount) + 1}`
+}
 
 // The colour tone of a space from the colours of the products in it. Products with no colour are ignored, and a space with none coloured is neutral.
 let determineSpaceTone = (state, space) => {
@@ -234,7 +312,7 @@ let summariseStock = (state) => {
 
 			summary.totalBoxes += entry.batches.reduce((total, batch) => total + batch.boxCount, 0)
 			summary.locations.push({
-				label: makeSpaceLabel(rackIndex, spaceIndex),
+				label: makeSpaceLabel(state, rackIndex, spaceIndex),
 				batches: entry.batches
 			})
 		}))
@@ -243,42 +321,55 @@ let summariseStock = (state) => {
 	})
 }
 
-// Plain text of the stock list for pasting elsewhere. A total that has uncounted pallets is written as at least, and a product with only uncounted pallets as unknown, because unknown is not zero.
+// A product has stock if it is in any space, even when the box count there is not entered yet, because unknown is not zero. Only products in no space count as having no stock.
+let hasStock = (summary) => summary.locations.length > 0
+
+let makeProductHeading = (product) => determineProductColour(product) === null ? product.name : `${product.name} (${determineProductColour(product)})`
+
+// Plain text of the stock list for pasting elsewhere. Products with stock come first, then products with no stock. A total that has uncounted pallets is written as at least, and a product with only uncounted pallets as unknown.
 let makeStockText = (state, dateText) => {
-	let lines = [`Freezer stock, ${dateText}`]
+	let lines = [`Racking Inventory stock, ${dateText}`]
+	let summaries = summariseStock(state)
 
 	if (state.products.length === 0) lines.push(``, `No products yet.`)
 
-	summariseStock(state).forEach(summary => {
-		let colour = determineProductColour(summary.product)
-		let heading = colour === null ? summary.product.name : `${summary.product.name} (${colour})`
+	summaries.filter(hasStock).forEach(summary => {
 		let uncountedText = `${makeSpaceCountText(summary.uncountedSpaceCount)} not counted`
-		let totalText = summary.locations.length === 0 ? `not in any space` : summary.uncountedSpaceCount === 0 ? makeBoxCountText(summary.totalBoxes) : summary.totalBoxes === 0 ? `count unknown, ${uncountedText}` : `at least ${makeBoxCountText(summary.totalBoxes)}, ${uncountedText}`
+		let totalText = summary.uncountedSpaceCount === 0 ? makeBoxCountText(summary.totalBoxes) : summary.totalBoxes === 0 ? `count unknown, ${uncountedText}` : `at least ${makeBoxCountText(summary.totalBoxes)}, ${uncountedText}`
 
-		lines.push(``, `${heading}: ${totalText}`)
+		lines.push(``, `${makeProductHeading(summary.product)}: ${totalText}`)
 		summary.locations.forEach(location => lines.push(`  ${location.label}: ${location.batches.length === 0 ? `not counted` : location.batches.map(batch => `${batch.code} \u00D7 ${batch.boxCount}`).join(`, `)}`))
 	})
+
+	let withoutStock = summaries.filter(summary => !hasStock(summary))
+
+	if (withoutStock.length > 0) {
+		lines.push(``, `No stock:`)
+		withoutStock.forEach(summary => lines.push(`  ${makeProductHeading(summary.product)}`))
+	}
 
 	return lines.join(`\n`)
 }
 
 // Checks the whole structure before saved or imported data is trusted.
 let validateImportedState = (data) => {
-	let invalid = makeResult(false, `This data is not a valid freezer backup.`)
+	let invalid = makeResult(false, `This data is not a valid racking backup.`)
 
 	if (!data || typeof data !== `object` || !Array.isArray(data.products) || !Array.isArray(data.racks)) return invalid
-	if (data.racks.length !== rackCount || !Number.isInteger(data.nextProductId)) return invalid
+	if (data.racks.length < 1 || !Number.isInteger(data.nextProductId)) return invalid
 
 	let productIds = data.products.map(product => product.id)
 
 	if (data.products.some(product => !Number.isInteger(product.id) || typeof product.name !== `string` || product.id >= data.nextProductId || (product.colour !== undefined && product.colour !== null && !productColourNames.includes(product.colour)))) return invalid
 
 	for (let rack of data.racks) {
-		if (!rack || !Array.isArray(rack.spaces) || rack.spaces.length !== levelCount * bayCount) return invalid
+		if (!rack || typeof rack.name !== `string` || rack.name.trim() === `` || !isValidSideCount(rack.levelCount) || !isValidSideCount(rack.bayCount)) return invalid
+		if (!Array.isArray(rack.spaces) || rack.spaces.length !== rack.levelCount * rack.bayCount) return invalid
 
 		for (let space of rack.spaces) {
 			if (!space || !Array.isArray(space.entries)) return invalid
 			if (space.isUnfinished !== undefined && typeof space.isUnfinished !== `boolean`) return invalid
+			if (space.isUnavailable !== undefined && typeof space.isUnavailable !== `boolean`) return invalid
 			if (new Set(space.entries.map(entry => entry.productId)).size !== space.entries.length) return invalid
 
 			for (let entry of space.entries) {

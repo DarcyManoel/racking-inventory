@@ -18,9 +18,9 @@ let loadState = () => {
 		}
 
 		localStorage.setItem(`${storageKey}.unreadable`, storedText)
-		loaded.warning = `Saved data could not be read, so the freezer is shown empty. The old data was kept under a second key and has not been deleted.`
+		loaded.warning = `Saved data could not be read, so the inventory is shown empty. The old data was kept under a second key and has not been deleted.`
 	} catch (error) {
-		loaded.warning = `Saved data could not be read, so the freezer is shown empty.`
+		loaded.warning = `Saved data could not be read, so the inventory is shown empty.`
 	}
 
 	return loaded

@@ -1,4 +1,6 @@
 :root {
+	--cell-gap: 8px;
+	--cell-size: min(110px, calc((100vw - 32px - 3 * var(--cell-gap)) / 4));
 	--colour-accent: #4a9bdc;
 	--colour-background: #0f1216;
 	--colour-border: #2e3641;
@@ -9,15 +11,18 @@
 	--colour-text: #e8ecf1;
 	--colour-warning: #e0a030;
 	--colour-white: #ffffff;
+	--fade-size: 28px;
 	color-scheme: dark;
 }
 
 html {
 	-webkit-text-size-adjust: 100%;
+	overscroll-behavior: none;
 }
 
 * {
 	box-sizing: border-box;
+	touch-action: manipulation;
 }
 
 body {
@@ -25,6 +30,7 @@ body {
 	color: var(--colour-text);
 	font: 16px/1.4 system-ui, -apple-system, sans-serif;
 	margin: 0;
+	overscroll-behavior: none;
 	padding-bottom: calc(72px + env(safe-area-inset-bottom));
 }
 
@@ -157,15 +163,20 @@ main {
 }
 
 .rack-switch {
-	display: grid;
+	display: flex;
+	flex-wrap: wrap;
 	gap: 8px;
-	grid-template-columns: 1fr 1fr;
 	margin-bottom: 12px;
 
-	>button.selected {
-		background: var(--colour-accent);
-		border-color: var(--colour-accent);
-		color: var(--colour-background);
+	>button {
+		flex: 1 1 0;
+		min-width: 90px;
+
+		&.selected {
+			background: var(--colour-accent);
+			border-color: var(--colour-accent);
+			color: var(--colour-background);
+		}
 	}
 
 	@media (min-width: 800px) {
@@ -178,12 +189,15 @@ main {
 	gap: 16px;
 
 	@media (min-width: 800px) {
-		grid-template-columns: 1fr 1fr;
+		align-items: flex-end;
+		display: flex;
+		flex-wrap: wrap;
 	}
 }
 
 .rack {
 	display: none;
+	width: fit-content;
 
 	&.selected {
 		display: block;
@@ -194,10 +208,76 @@ main {
 	}
 }
 
+.rack-window {
+	position: relative;
+
+	&.can-scroll-left>.rack-fade.left,
+	&.can-scroll-right>.rack-fade.right,
+	&.can-scroll-up>.rack-fade.top,
+	&.can-scroll-down>.rack-fade.bottom {
+		opacity: 1;
+	}
+
+	>.rack-fade {
+		opacity: 0;
+		pointer-events: none;
+		position: absolute;
+		transition: opacity 0.15s;
+
+		&.left {
+			background: linear-gradient(to right, var(--colour-background), transparent);
+			bottom: 0;
+			left: 0;
+			top: 0;
+			width: var(--fade-size);
+		}
+
+		&.right {
+			background: linear-gradient(to left, var(--colour-background), transparent);
+			bottom: 0;
+			right: 0;
+			top: 0;
+			width: var(--fade-size);
+		}
+
+		&.top {
+			background: linear-gradient(to bottom, var(--colour-background), transparent);
+			height: var(--fade-size);
+			left: 0;
+			right: 0;
+			top: 0;
+		}
+
+		&.bottom {
+			background: linear-gradient(to top, var(--colour-background), transparent);
+			bottom: 0;
+			height: var(--fade-size);
+			left: 0;
+			right: 0;
+		}
+	}
+}
+
+/* The visible window of every rack is at most the default size (4 bays by 4 levels), set through --window-bays and --window-levels, so a bigger rack scrolls inside it and every location stays the same size. */
+.rack-scroll {
+	height: calc(var(--window-levels) * var(--cell-size) + (var(--window-levels) - 1) * var(--cell-gap));
+	overflow: auto;
+	scrollbar-width: none;
+	width: calc(var(--window-bays) * var(--cell-size) + (var(--window-bays) - 1) * var(--cell-gap));
+
+	&::-webkit-scrollbar {
+		display: none;
+	}
+}
+
 .rack-grid {
 	display: grid;
-	gap: 8px;
-	grid-template-columns: repeat(4, 1fr);
+	gap: var(--cell-gap);
+	grid-template-columns: repeat(var(--rack-bays), var(--cell-size));
+}
+
+.space-gap {
+	aspect-ratio: 1;
 }
 
 .space-cell {
@@ -207,7 +287,7 @@ main {
 	--cell-fill-second: color-mix(in srgb, var(--cell-colour-second) 12%, var(--colour-surface));
 	align-items: stretch;
 	aspect-ratio: 1;
-	background: conic-gradient(var(--cell-fill-second) 25%, var(--cell-fill-first) 0 50%, var(--cell-fill-second) 0 75%, var(--cell-fill-first) 0) 0 0 / 100% 100% padding-box, conic-gradient(var(--cell-colour-second) 25%, var(--cell-colour-first) 0 50%, var(--cell-colour-second) 0 75%, var(--cell-colour-first) 0) 0 0 / 100% 100% border-box;
+	background: conic-gradient(var(--cell-fill-second) 25%, var(--cell-fill-first) 0 50%, var(--cell-fill-second) 0 75%, var(--cell-fill-first) 0) 0 0 / calc(200% / 3) calc(200% / 3) padding-box, conic-gradient(var(--cell-colour-second) 25%, var(--cell-colour-first) 0 50%, var(--cell-colour-second) 0 75%, var(--cell-colour-first) 0) 0 0 / calc(200% / 3) calc(200% / 3) border-box;
 	border: 2px solid transparent;
 	flex-direction: column;
 	justify-content: flex-start;
@@ -235,7 +315,7 @@ main {
 		border-color: var(--cell-colour-first);
 		border-style: dashed;
 
-		/* A dashed border cannot change colour along its length, so a mixed cell draws the same dashed ring twice, one in each colour, and clips each ring to two opposite quarters to give the 2x2 checkerboard pattern. */
+		/* A dashed border cannot change colour along its length, so a mixed cell draws the same dashed ring twice, one in each colour, and masks each ring with the same 3x3 checkerboard as the fill, one inverted. */
 		&.tone-both {
 			border-color: transparent;
 			position: relative;
@@ -251,13 +331,15 @@ main {
 			}
 
 			&::before {
+				-webkit-mask: conic-gradient(transparent 25%, black 0 50%, transparent 0 75%, black 0) 0 0 / calc(200% / 3) calc(200% / 3);
 				border-color: var(--cell-colour-first);
-				clip-path: polygon(0 0, 50% 0, 50% 50%, 100% 50%, 100% 100%, 50% 100%, 50% 50%, 0 50%);
+				mask: conic-gradient(transparent 25%, black 0 50%, transparent 0 75%, black 0) 0 0 / calc(200% / 3) calc(200% / 3);
 			}
 
 			&::after {
+				-webkit-mask: conic-gradient(black 25%, transparent 0 50%, black 0 75%, transparent 0) 0 0 / calc(200% / 3) calc(200% / 3);
 				border-color: var(--cell-colour-second);
-				clip-path: polygon(50% 0, 100% 0, 100% 50%, 50% 50%, 50% 100%, 0 100%, 0 50%, 50% 50%);
+				mask: conic-gradient(black 25%, transparent 0 50%, black 0 75%, transparent 0) 0 0 / calc(200% / 3) calc(200% / 3);
 			}
 		}
 	}
@@ -284,6 +366,10 @@ main {
 
 			&.batch {
 				padding-left: 10px;
+			}
+
+			&.uncounted {
+				color: var(--colour-danger);
 			}
 
 			&.more {
@@ -323,6 +409,10 @@ main {
 			>span {
 				color: var(--colour-muted);
 				font-size: 14px;
+
+				&.uncounted {
+					color: var(--colour-danger);
+				}
 			}
 		}
 	}
@@ -349,7 +439,7 @@ main {
 	}
 }
 
-.product-list {
+.item-list {
 	list-style: none;
 	margin: 0 0 16px;
 	padding: 0;
@@ -373,7 +463,44 @@ main {
 			flex: 1;
 			width: auto;
 		}
+
+		>.unavailable-locations {
+			flex: 1 1 100%;
+
+			>ul {
+				list-style: none;
+				margin: 4px 0 0;
+				padding: 0;
+
+				>li {
+					align-items: center;
+					border-top: 1px solid var(--colour-border);
+					display: flex;
+					gap: 8px;
+					justify-content: space-between;
+					padding: 4px 0;
+				}
+			}
+		}
 	}
+}
+
+.add-rack-form {
+	display: grid;
+	gap: 8px;
+	grid-template-columns: 1fr 1fr;
+	margin: 12px 0;
+
+	>input,
+	>button {
+		grid-column: 1 / -1;
+	}
+}
+
+.stock-section {
+	color: var(--colour-muted);
+	font-size: 16px;
+	margin: 20px 0 8px;
 }
 
 .tab-bar {
@@ -414,6 +541,7 @@ main {
 	left: 0;
 	max-height: 88dvh;
 	overflow-y: auto;
+	overscroll-behavior: none;
 	padding: 16px 16px calc(16px + env(safe-area-inset-bottom));
 	position: fixed;
 	right: 0;

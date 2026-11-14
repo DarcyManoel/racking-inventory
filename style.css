@@ -162,23 +162,40 @@ main {
 	}
 }
 
+/* The selectors are one line that scrolls sideways, so they always take the same height and the racks below never move. */
+.room-switch,
 .rack-switch {
 	display: flex;
-	flex-wrap: wrap;
 	gap: 8px;
 	margin-bottom: 12px;
+	overflow-x: auto;
+	overscroll-behavior-x: none;
+	position: relative;
+	scrollbar-width: none;
+
+	&::-webkit-scrollbar {
+		display: none;
+	}
 
 	>button {
-		flex: 1 1 0;
-		min-width: 90px;
+		flex: 1 0 auto;
+		padding: 0 16px;
+		white-space: nowrap;
 
 		&.selected {
 			background: var(--colour-accent);
 			border-color: var(--colour-accent);
 			color: var(--colour-background);
 		}
-	}
 
+		&:disabled {
+			color: var(--colour-muted);
+			cursor: default;
+		}
+	}
+}
+
+.rack-switch {
 	@media (min-width: 800px) {
 		display: none;
 	}
@@ -206,6 +223,13 @@ main {
 	@media (min-width: 800px) {
 		display: block;
 	}
+}
+
+/* Every rack sits in a stand as tall as the default 4x4 window, with the rack at the bottom, so a shorter rack stands on the floor instead of hanging from the top. */
+.rack-stand {
+	align-items: flex-end;
+	display: flex;
+	height: calc(var(--stand-levels) * var(--cell-size) + (var(--stand-levels) - 1) * var(--cell-gap));
 }
 
 .rack-window {
@@ -280,6 +304,37 @@ main {
 	aspect-ratio: 1;
 }
 
+.floor {
+	margin-top: 24px;
+
+	>.floor-grid {
+		display: grid;
+		gap: var(--cell-gap);
+		grid-template-columns: repeat(auto-fill, var(--cell-size));
+	}
+}
+
+.room-block {
+	margin-bottom: 28px;
+
+	>.room-header {
+		align-items: center;
+		display: flex;
+		gap: 8px;
+
+		>h2 {
+			flex: 1;
+			margin: 0;
+			overflow-wrap: anywhere;
+		}
+	}
+
+	>h3 {
+		font-size: 16px;
+		margin: 16px 0 8px;
+	}
+}
+
 .space-cell {
 	--cell-colour-first: var(--colour-muted);
 	--cell-colour-second: var(--colour-muted);
@@ -347,6 +402,14 @@ main {
 	&.empty {
 		background: var(--colour-surface);
 		border: 2px dashed var(--colour-border);
+	}
+
+	&.add-tile {
+		align-items: center;
+		color: var(--colour-accent);
+		font-size: 12px;
+		justify-content: center;
+		text-align: center;
 	}
 
 	>.space-lines {

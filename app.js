@@ -35,7 +35,7 @@ let renderMessage = () => viewState.message === `` ? `` : `<p class="message">${
 // One tile showing a space's products with their batches indented beneath, used for rack and floor spaces and for held pallets. The tone class sets the colours. fitSpaceCell trims whatever does not fit.
 let renderSpaceTile = (space, onclickText, ariaLabel) => {
 	let lines = space.entries.map(entry => {
-		let batchLines = entry.batches.length === 0 ? `<span class="space-line batch uncounted">not counted</span>` : entry.batches.map(batch => `<span class="space-line batch">${makeSafeForHtml(batch.code)} \u00D7 ${batch.boxCount}</span>`).join(``)
+		let batchLines = entry.batches.length === 0 ? `<span class="space-line batch uncounted">not counted</span>` : entry.batches.map(batch => `<span class="space-line batch">${makeSafeForHtml(makeBatchText(batch, false))}</span>`).join(``)
 
 		return `<span class="space-line product">${makeSafeForHtml(findProduct(state, entry.productId).name)}</span>${batchLines}`
 	}).join(``)
@@ -154,7 +154,7 @@ let renderOverviewTab = () => {
 let renderStockTab = () => {
 	let summaries = summariseStock(state)
 	let stockedHtml = summaries.filter(hasStock).map(entry => {
-		let locations = entry.locations.map(location => `<li><strong>${makeSafeForHtml(location.label)}</strong><span${location.batches.length === 0 ? ` class="uncounted"` : ``}>${location.batches.length === 0 ? `not counted` : location.batches.map(batch => `${makeSafeForHtml(batch.code)} \u00D7 ${batch.boxCount}`).join(`, `)}</span></li>`).join(``)
+		let locations = entry.locations.map(location => `<li><strong>${makeSafeForHtml(location.label)}</strong><span${location.batches.length === 0 ? ` class="uncounted"` : ``}>${location.batches.length === 0 ? `not counted` : location.batches.map(batch => makeSafeForHtml(makeBatchText(batch, location.batches.length > 1))).join(`, `)}</span></li>`).join(``)
 		let uncounted = entry.uncountedSpaceCount > 0 ? `<p class="note uncounted">${makeSpaceCountText(entry.uncountedSpaceCount)} ${entry.uncountedSpaceCount === 1 ? `holds` : `hold`} this product with boxes not counted, so the total is a minimum.</p>` : ``
 
 		return `<article class="stock-entry"><h2>${makeSwatchHtml(entry.product)}${makeSafeForHtml(entry.product.name)}</h2><p class="stock-total">${makeBoxCountText(entry.totalBoxes)}</p>${uncounted}<ul>${locations}</ul></article>`
@@ -196,10 +196,10 @@ let renderSheet = () => {
 	let isFloor = isFloorLocation(location)
 	let space = getSpace(state, location)
 	let entryBlocks = space.entries.map(entry => {
-		let batchRows = entry.batches.map((batch, batchIndex) => `<li class="batch-row"><span class="batch-code">${makeSafeForHtml(batch.code)}</span><button onclick="nudgeBatch(${entry.productId},${batchIndex},-1)" aria-label="Remove one box">\u2212</button><span class="batch-count">${batch.boxCount}</span><button onclick="nudgeBatch(${entry.productId},${batchIndex},1)" aria-label="Add one box">+</button><button class="danger" onclick="removeBatch(${entry.productId},${batchIndex})" aria-label="Delete batch">\u2715</button></li>`).join(``)
+		let batchRows = entry.batches.map((batch, batchIndex) => `<li class="batch-row">${batch.code === `` ? `<span class="batch-code unbatched">(no batch)</span>` : `<span class="batch-code">${makeSafeForHtml(batch.code)}</span>`}<button onclick="nudgeBatch(${entry.productId},${batchIndex},-1)" aria-label="Remove one box">\u2212</button><span class="batch-count">${batch.boxCount}</span><button onclick="nudgeBatch(${entry.productId},${batchIndex},1)" aria-label="Add one box">+</button><button class="danger" onclick="removeBatch(${entry.productId},${batchIndex})" aria-label="Delete batch">\u2715</button></li>`).join(``)
 		let uncounted = entry.batches.length === 0 ? `<p class="note">No batches yet, so the box count is unknown.</p>` : ``
 
-		return `<section class="entry-block"><div class="entry-header"><h3>${makeSwatchHtml(findProduct(state, entry.productId))}${makeSafeForHtml(findProduct(state, entry.productId).name)}</h3><button class="danger" onclick="removeEntryConfirm(${entry.productId})">Remove</button></div>${uncounted}<ul class="batch-list">${batchRows}</ul><form class="add-row" onsubmit="submitBatch(${entry.productId});return false"><input id="batch-code-input-${entry.productId}" placeholder="Batch code" autocomplete="off"><input id="batch-count-input-${entry.productId}" type="number" inputmode="numeric" min="1" value="1"><button class="primary">Add batch</button></form></section>`
+		return `<section class="entry-block"><div class="entry-header"><h3>${makeSwatchHtml(findProduct(state, entry.productId))}${makeSafeForHtml(findProduct(state, entry.productId).name)}</h3><button class="danger" onclick="removeEntryConfirm(${entry.productId})">Remove</button></div>${uncounted}<ul class="batch-list">${batchRows}</ul><form class="add-row" onsubmit="submitBatch(${entry.productId});return false"><input id="batch-code-input-${entry.productId}" placeholder="Batch code (optional)" autocomplete="off"><input id="batch-count-input-${entry.productId}" type="number" inputmode="numeric" min="1" value="1"><button class="primary">Add batch</button></form></section>`
 	}).join(``)
 	let availableProducts = state.products.filter(product => findEntry(space, product.id) === null)
 	let options = `<option value="">Choose a product\u2026</option>` + sortProducts(availableProducts).map(product => `<option value="${product.id}">${makeSafeForHtml(makeProductHeading(product))}</option>`).join(``)
@@ -208,9 +208,8 @@ let renderSheet = () => {
 	let unavailableControl = isFloor || space.entries.length > 0 ? `` : `<label class="check-row"><input type="checkbox"${space.isUnavailable === true ? ` checked` : ``} onchange="toggleSpaceUnavailable(this.checked)">Location unavailable (hides this space)</label>${space.isUnavailable === true ? `<p class="note">To bring it back later, open the Rooms tab and choose Restore.</p>` : ``}`
 	let emptyButton = space.entries.length === 0 ? `` : `<button class="danger" onclick="clearSpace()">Empty this space</button>`
 	let holdDropControl = space.isUnavailable === true ? `` : space.entries.length > 0 ? `<div class="sheet-actions"><button onclick="holdSpaceHere()">Hold</button></div>` : `<div class="sheet-actions"><button class="primary" onclick="openDropModal()"${state.heldSpaces.length === 0 ? ` disabled` : ``}>Drop (${state.heldSpaces.length})</button></div>`
-	let removeFloorButton = isFloor && space.entries.length === 0 ? `<button class="danger" onclick="removeFloorSpaceHere()">Remove this floor space</button>` : ``
 
-	return `<div class="sheet-backdrop" onclick="closeSheet()"></div><div class="sheet"><div class="sheet-header"><h2>${makeSafeForHtml(makeSpaceLabel(state, location))}</h2><button onclick="closeSheet()" aria-label="Close">\u2715</button></div>${holdDropControl}${viewState.heldModal === null ? renderMessage() : ``}${entryBlocks}${unfinishedControl}${addProductControl}${unavailableControl}${emptyButton}${removeFloorButton}</div>`
+	return `<div class="sheet-backdrop" onclick="closeSheet()"></div><div class="sheet"><div class="sheet-header"><h2>${makeSafeForHtml(makeSpaceLabel(state, location))}</h2><button onclick="closeSheet()" aria-label="Close">\u2715</button></div>${holdDropControl}${viewState.heldModal === null ? renderMessage() : ``}${entryBlocks}${unfinishedControl}${addProductControl}${unavailableControl}${emptyButton}</div>`
 }
 
 // The edit sheet of one product, opened by tapping its name on the Products tab. It works on a draft kept in viewState, so a refused save keeps what was typed.
@@ -282,16 +281,30 @@ let openSpace = (roomIndex, rackIndex, spaceIndex) => {
 	render()
 }
 
+// Closing the sheet of a floor space that was left empty removes that space, so the floor never keeps unused tiles.
 let closeSheet = () => {
+	let wasFloorSpaceRemoved = removeFloorSpaceIfEmpty(state, viewState.openLocation)
+
 	viewState.openLocation = null
+
+	if (wasFloorSpaceRemoved) return commitChange(``)
+
 	viewState.message = ``
 	render()
+}
+
+// Removes the open floor space once it is empty and closes its sheet. Called after anything that can empty a space.
+let removeOpenFloorSpaceIfEmpty = () => {
+	if (removeFloorSpaceIfEmpty(state, viewState.openLocation)) viewState.openLocation = null
 }
 
 let holdSpaceHere = () => {
 	let result = holdSpace(state, viewState.openLocation)
 
-	if (result.isOk) viewState.openLocation = null
+	if (result.isOk) {
+		removeFloorSpaceIfEmpty(state, viewState.openLocation)
+		viewState.openLocation = null
+	}
 
 	handleResult(result)
 }
@@ -340,14 +353,6 @@ let addFloorSpaceToRoom = (roomIndex) => {
 
 	handleResult(result)
 	openSpace(roomIndex, floorAreaIndex, state.rooms[roomIndex].floorSpaces.length - 1)
-}
-
-let removeFloorSpaceHere = () => {
-	let result = removeFloorSpace(state, viewState.openLocation.roomIndex, viewState.openLocation.spaceIndex)
-
-	if (result.isOk) viewState.openLocation = null
-
-	handleResult(result)
 }
 
 let addProductToSpaceChosen = (value) => {
@@ -404,6 +409,7 @@ let removeEntryConfirm = (productId) => {
 	if (entry.batches.length > 0 && !confirm(`Remove ${findProduct(state, productId).name} and its batches from this space?`)) return
 
 	removeProductFromSpace(state, viewState.openLocation, productId)
+	removeOpenFloorSpaceIfEmpty()
 	commitChange(``)
 }
 
@@ -411,10 +417,21 @@ let clearSpace = () => {
 	if (!confirm(`Empty this space and delete everything in it?`)) return
 
 	emptySpace(state, viewState.openLocation)
+	removeOpenFloorSpaceIfEmpty()
 	commitChange(``)
 }
 
-let submitBatch = (productId) => handleResult(addBatch(state, viewState.openLocation, productId, document.getElementById(`batch-code-input-${productId}`).value, Number(document.getElementById(`batch-count-input-${productId}`).value)))
+// The batch code may be left empty for boxes with no batch. Adding unbatched boxes to a product that already has some asks first, because it combines them into the existing count.
+let submitBatch = (productId) => {
+	let batchCode = document.getElementById(`batch-code-input-${productId}`).value
+	let boxCount = Number(document.getElementById(`batch-count-input-${productId}`).value)
+	let entry = findEntry(getSpace(state, viewState.openLocation), productId)
+	let isCombiningUnbatched = batchCode.trim() === `` && Number.isInteger(boxCount) && boxCount >= 1 && findUnbatchedBatch(entry) !== null
+
+	if (isCombiningUnbatched && !confirm(`This product already has unbatched boxes in this space. Add ${makeBoxCountText(boxCount)} to the existing count?`)) return
+
+	handleResult(addBatch(state, viewState.openLocation, productId, batchCode, boxCount, isCombiningUnbatched))
+}
 
 let nudgeBatch = (productId, batchIndex, deltaBoxCount) => {
 	adjustBatch(state, viewState.openLocation, productId, batchIndex, deltaBoxCount)

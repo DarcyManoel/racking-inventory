@@ -728,6 +728,11 @@ main {
 					flex: 1;
 					font-weight: 600;
 					overflow-wrap: anywhere;
+
+					&.unbatched {
+						color: var(--colour-muted);
+						font-weight: 400;
+					}
 				}
 
 				>.batch-count {

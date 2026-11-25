@@ -219,15 +219,13 @@ let addFloorSpace = (state, roomIndex) => {
 	return makeResult(true, ``)
 }
 
-// Only an empty floor space can be removed.
-let removeFloorSpace = (state, roomIndex, spaceIndex) => {
-	let room = state.rooms[roomIndex]
+// A floor space only exists while it holds something, so an empty one is removed straight away. Returns whether it was removed, so the caller can close the sheet that showed it. Rack spaces are fixed in place and are never removed.
+let removeFloorSpaceIfEmpty = (state, location) => {
+	if (!isFloorLocation(location) || getSpace(state, location).entries.length > 0) return false
 
-	if (room.floorSpaces[spaceIndex].entries.length > 0) return makeResult(false, `Empty this floor space first.`)
+	state.rooms[location.roomIndex].floorSpaces.splice(location.spaceIndex, 1)
 
-	room.floorSpaces.splice(spaceIndex, 1)
-
-	return makeResult(true, ``)
+	return true
 }
 
 // Two products may share a name when their colours differ, so a product is only taken when another product has the same name (ignoring letter case) and the same colour, where no colour counts as a colour of its own.
@@ -306,6 +304,12 @@ let makeBoxCountText = (boxCount) => `${boxCount} ${boxCount === 1 ? `box` : `bo
 
 // Plain wording for a number of spaces, so one space is never written as 1 spaces.
 let makeSpaceCountText = (spaceCount) => `${spaceCount} ${spaceCount === 1 ? `space` : `spaces`}`
+
+// One batch as text. A batch with no code holds unbatched boxes, written as a plain box count, or as no batch \u00D7 N when it is listed together with named batches so the line still reads as a batch.
+let makeBatchText = (batch, isListedWithOthers) => batch.code !== `` ? `${batch.code} \u00D7 ${batch.boxCount}` : isListedWithOthers ? `no batch \u00D7 ${batch.boxCount}` : makeBoxCountText(batch.boxCount)
+
+// The batch of an entry that has no code, or null. There is at most one, because adding unbatched boxes combines into it.
+let findUnbatchedBatch = (entry) => entry.batches.find(batch => batch.code === ``) || null
 
 // A product that is still in any space, or on any held pallet, cannot be removed, so no entry is ever left pointing at a missing product.
 let removeProduct = (state, productId) => {
@@ -408,14 +412,24 @@ let setSpaceUnavailable = (state, location, isUnavailable) => {
 	return makeResult(true, ``)
 }
 
-// Batch codes must be unique within one product in one space. The same code may appear under another product or in another space.
-let addBatch = (state, location, productId, rawCode, boxCount) => {
+// The batch code is optional. Batch codes must be unique within one product in one space, and so is the empty code, which stands for unbatched boxes and is only combined into when isCombiningUnbatched is true. The same code may appear under another product or in another space.
+let addBatch = (state, location, productId, rawCode, boxCount, isCombiningUnbatched) => {
 	let entry = findEntry(getSpace(state, location), productId)
 	let code = rawCode.trim()
 
 	if (entry === null) return makeResult(false, `Add the product to this space first.`)
-	if (code === ``) return makeResult(false, `Enter a batch code.`)
 	if (!Number.isInteger(boxCount) || boxCount < 1) return makeResult(false, `Box count must be a whole number of at least 1.`)
+
+	let unbatchedBatch = code === `` ? findUnbatchedBatch(entry) : null
+
+	if (unbatchedBatch !== null) {
+		if (isCombiningUnbatched !== true) return makeResult(false, `This product already has unbatched boxes in this space.`)
+
+		unbatchedBatch.boxCount += boxCount
+
+		return makeResult(true, ``)
+	}
+
 	if (entry.batches.some(batch => batch.code.toLowerCase() === code.toLowerCase())) return makeResult(false, `This product already has that batch code in this space.`)
 
 	entry.batches.push({
@@ -546,7 +560,9 @@ let makeStockSectionLines = (summaries) => {
 		let totalText = summary.uncountedSpaceCount === 0 ? makeBoxCountText(summary.totalBoxes) : summary.totalBoxes === 0 ? `count unknown, ${uncountedText}` : `at least ${makeBoxCountText(summary.totalBoxes)}, ${uncountedText}`
 
 		lines.push(`${makeProductHeading(summary.product)}: ${totalText}`)
-		consolidateBatches(summary.locations).forEach(batch => lines.push(`  ${batch.code} \u00D7 ${batch.boxCount}`))
+		let consolidatedBatches = consolidateBatches(summary.locations)
+
+		consolidatedBatches.forEach(batch => lines.push(`  ${makeBatchText(batch, consolidatedBatches.length > 1)}`))
 	})
 
 	return lines

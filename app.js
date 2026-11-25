@@ -9,6 +9,7 @@ let viewState = {
 	message: ``,
 	loadWarning: ``,
 	saveFailed: false,
+	productEdit: null,
 	copyLabel: `Copy stock`,
 	rackScrollPositions: {},
 	switchScrollPositions: {}
@@ -165,9 +166,9 @@ let renderStockTab = () => {
 }
 
 let renderProductsTab = () => {
-	let rows = state.products.map(product => `<li><span>${makeSwatchHtml(product)}${makeSafeForHtml(product.name)}</span><select onchange="chooseProductColour(${product.id},this.value)" aria-label="Colour">${makeColourOptionsHtml(product.colour)}</select><button onclick="renameProductPrompt(${product.id})">Rename</button><button class="danger" onclick="removeProductConfirm(${product.id})">Remove</button></li>`).join(``)
+	let rows = sortProducts(state.products).map(product => `<li><button class="product-name" onclick="openProductEdit(${product.id})" aria-label="Edit ${makeSafeForHtml(product.name)}">${makeSwatchHtml(product)}${makeSafeForHtml(product.name)}</button><button class="danger" onclick="removeProductConfirm(${product.id})">Remove</button></li>`).join(``)
 
-	return `${renderMessage()}<form class="add-row" onsubmit="submitProduct();return false"><input id="product-name-input" placeholder="New product name" autocomplete="off"><select id="product-colour-input" aria-label="Colour">${makeColourOptionsHtml(``)}</select><button class="primary">Add</button></form><ul class="item-list">${rows}</ul><h2>Backup</h2><p class="note">Data lives only in this browser on this device. Export a copy now and then, and keep it somewhere safe.</p><div class="add-row"><button onclick="exportBackup()">Export backup</button><label class="button">Import backup<input type="file" accept="application/json" onchange="importBackup(event)" hidden></label></div>`
+	return `${viewState.productEdit === null ? renderMessage() : ``}<form class="add-row" onsubmit="submitProduct();return false"><input id="product-name-input" placeholder="New product name" autocomplete="off"><select id="product-colour-input" aria-label="Colour">${makeColourOptionsHtml(``)}</select><button class="primary">Add</button></form><ul class="item-list product-list">${rows}</ul><h2>Backup</h2><p class="note">Data lives only in this browser on this device. Export a copy now and then, and keep it somewhere safe.</p><div class="add-row"><button onclick="exportBackup()">Export backup</button><label class="button">Import backup<input type="file" accept="application/json" onchange="importBackup(event)" hidden></label></div>`
 }
 
 // Each room with its racks (rename, remove, restore unavailable locations) and a form to add a rack, then a form to add a room.
@@ -201,7 +202,7 @@ let renderSheet = () => {
 		return `<section class="entry-block"><div class="entry-header"><h3>${makeSwatchHtml(findProduct(state, entry.productId))}${makeSafeForHtml(findProduct(state, entry.productId).name)}</h3><button class="danger" onclick="removeEntryConfirm(${entry.productId})">Remove</button></div>${uncounted}<ul class="batch-list">${batchRows}</ul><form class="add-row" onsubmit="submitBatch(${entry.productId});return false"><input id="batch-code-input-${entry.productId}" placeholder="Batch code" autocomplete="off"><input id="batch-count-input-${entry.productId}" type="number" inputmode="numeric" min="1" value="1"><button class="primary">Add batch</button></form></section>`
 	}).join(``)
 	let availableProducts = state.products.filter(product => findEntry(space, product.id) === null)
-	let options = `<option value="">Choose a product\u2026</option>` + availableProducts.map(product => `<option value="${product.id}">${makeSafeForHtml(product.name)}</option>`).join(``)
+	let options = `<option value="">Choose a product\u2026</option>` + sortProducts(availableProducts).map(product => `<option value="${product.id}">${makeSafeForHtml(makeProductHeading(product))}</option>`).join(``)
 	let addProductControl = space.isUnavailable === true ? `` : availableProducts.length === 0 ? `<p class="note">${state.products.length === 0 ? `Add products on the Products tab first.` : `Every product is already in this space.`}</p>` : `<label>Add a product to this space<select onchange="addProductToSpaceChosen(this.value)">${options}</select></label>`
 	let unfinishedControl = space.entries.length === 0 ? `` : `<label class="check-row"><input type="checkbox"${space.isUnfinished === true ? ` checked` : ``} onchange="toggleSpaceUnfinished(this.checked)">Unfinished pallet</label>`
 	let unavailableControl = isFloor || space.entries.length > 0 ? `` : `<label class="check-row"><input type="checkbox"${space.isUnavailable === true ? ` checked` : ``} onchange="toggleSpaceUnavailable(this.checked)">Location unavailable (hides this space)</label>${space.isUnavailable === true ? `<p class="note">To bring it back later, open the Rooms tab and choose Restore.</p>` : ``}`
@@ -210,6 +211,13 @@ let renderSheet = () => {
 	let removeFloorButton = isFloor && space.entries.length === 0 ? `<button class="danger" onclick="removeFloorSpaceHere()">Remove this floor space</button>` : ``
 
 	return `<div class="sheet-backdrop" onclick="closeSheet()"></div><div class="sheet"><div class="sheet-header"><h2>${makeSafeForHtml(makeSpaceLabel(state, location))}</h2><button onclick="closeSheet()" aria-label="Close">\u2715</button></div>${holdDropControl}${viewState.heldModal === null ? renderMessage() : ``}${entryBlocks}${unfinishedControl}${addProductControl}${unavailableControl}${emptyButton}${removeFloorButton}</div>`
+}
+
+// The edit sheet of one product, opened by tapping its name on the Products tab. It works on a draft kept in viewState, so a refused save keeps what was typed.
+let renderProductEditSheet = () => {
+	if (viewState.productEdit === null) return ``
+
+	return `<div class="sheet-backdrop" onclick="closeProductEdit()"></div><div class="sheet"><div class="sheet-header"><h2>Edit product</h2><button onclick="closeProductEdit()" aria-label="Close">\u2715</button></div>${renderMessage()}<label>Name<input id="product-edit-name-input" value="${makeSafeForHtml(viewState.productEdit.name)}" autocomplete="off" onkeydown="if(event.key===\`Enter\`)submitProductEdit()"></label><label>Colour<select id="product-edit-colour-input">${makeColourOptionsHtml(viewState.productEdit.colour)}</select></label><div class="sheet-actions"><button onclick="closeProductEdit()">Cancel</button><button class="primary" onclick="submitProductEdit()">Save</button></div></div>`
 }
 
 // The held pallets drawn as tiles like a rack. When opened from an empty space's sheet (a target location is set) tapping a tile drops that pallet there. Otherwise it is for looking only.
@@ -240,7 +248,7 @@ let render = () => {
 	let warning = viewState.loadWarning === `` ? `` : `<p class="message">${makeSafeForHtml(viewState.loadWarning)}</p>`
 	let tabButtons = [[`overview`, `Overview`], [`stock`, `Stock`], [`products`, `Products`], [`rooms`, `Rooms`]].map(([tabName, tabLabel]) => `<button class="${viewState.tab === tabName ? `selected` : ``}" onclick="switchTab(\`${tabName}\`)">${tabLabel}</button>`).join(``)
 
-	document.getElementById(`app`).innerHTML = `<header class="app-header"><h1>Racking Inventory</h1><div class="header-actions"><span class="save-status ${viewState.saveFailed ? `failed` : ``}">${saveText}</span><button id="copy-stock-button" onclick="copyStockText()">${makeSafeForHtml(viewState.copyLabel)}</button></div></header>${warning}<main>${tabContent}</main><nav class="tab-bar">${tabButtons}</nav>${renderSheet()}${renderHeldModal()}`
+	document.getElementById(`app`).innerHTML = `<header class="app-header"><h1>Racking Inventory</h1><div class="header-actions"><span class="save-status ${viewState.saveFailed ? `failed` : ``}">${saveText}</span><button id="copy-stock-button" onclick="copyStockText()">${makeSafeForHtml(viewState.copyLabel)}</button></div></header>${warning}<main>${tabContent}</main><nav class="tab-bar">${tabButtons}</nav>${renderSheet()}${renderHeldModal()}${renderProductEditSheet()}`
 
 	sheetElement = document.querySelector(`.sheet`)
 	if (sheetElement) sheetElement.scrollTop = sheetScrollTopPx
@@ -420,12 +428,34 @@ let removeBatch = (productId, batchIndex) => {
 
 let submitProduct = () => handleResult(addProduct(state, document.getElementById(`product-name-input`).value, document.getElementById(`product-colour-input`).value))
 
-let chooseProductColour = (productId, value) => handleResult(setProductColour(state, productId, value))
+let openProductEdit = (productId) => {
+	let product = findProduct(state, productId)
 
-let renameProductPrompt = (productId) => {
-	let newName = prompt(`New name for this product`, findProduct(state, productId).name)
+	viewState.productEdit = {
+		productId: productId,
+		name: product.name,
+		colour: determineProductColour(product) || ``
+	}
+	viewState.message = ``
+	render()
+}
 
-	if (newName !== null) handleResult(renameProduct(state, productId, newName))
+let closeProductEdit = () => {
+	viewState.productEdit = null
+	viewState.message = ``
+	render()
+}
+
+// Saves the name and colour together. The sheet stays open with the typed values and the reason when the save is refused.
+let submitProductEdit = () => {
+	viewState.productEdit.name = document.getElementById(`product-edit-name-input`).value
+	viewState.productEdit.colour = document.getElementById(`product-edit-colour-input`).value
+
+	let result = updateProduct(state, viewState.productEdit.productId, viewState.productEdit.name, viewState.productEdit.colour)
+
+	if (result.isOk) viewState.productEdit = null
+
+	handleResult(result)
 }
 
 let removeProductConfirm = (productId) => {
@@ -530,7 +560,7 @@ state = loaded.state
 viewState.loadWarning = loaded.warning
 render()
 
-// Refits the overview cells when the window size or orientation changes, unless the edit sheet is open and a re-render would interrupt typing.
+// Refits the overview cells when the window size or orientation changes, unless a sheet is open and a re-render would interrupt typing.
 window.addEventListener(`resize`, () => {
-	if (viewState.openLocation === null && viewState.heldModal === null) render()
+	if (viewState.openLocation === null && viewState.heldModal === null && viewState.productEdit === null) render()
 })

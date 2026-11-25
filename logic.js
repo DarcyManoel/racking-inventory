@@ -230,7 +230,8 @@ let removeFloorSpace = (state, roomIndex, spaceIndex) => {
 	return makeResult(true, ``)
 }
 
-let isNameTaken = (state, name, ignoredProductId) => state.products.some(product => product.id !== ignoredProductId && product.name.toLowerCase() === name.toLowerCase())
+// Two products may share a name when their colours differ, so a product is only taken when another product has the same name (ignoring letter case) and the same colour, where no colour counts as a colour of its own.
+let isProductTaken = (state, name, colour, ignoredProductId) => state.products.some(product => product.id !== ignoredProductId && product.name.toLowerCase() === name.toLowerCase() && determineProductColour(product) === (colour || null))
 
 // A product with no colour assigned (null, or missing in older saved data) is shown neutrally rather than guessed at.
 let determineProductColour = (product) => product && productColourNames.includes(product.colour) ? product.colour : null
@@ -240,8 +241,8 @@ let addProduct = (state, rawName, colour) => {
 	let colourName = colour || null
 
 	if (name === ``) return makeResult(false, `Enter a product name.`)
-	if (isNameTaken(state, name, null)) return makeResult(false, `That product already exists.`)
 	if (colourName !== null && !productColourNames.includes(colourName)) return makeResult(false, `Choose brown, white or no colour.`)
+	if (isProductTaken(state, name, colourName, null)) return makeResult(false, `That product and colour already exists.`)
 
 	state.products.push({
 		id: state.nextProductId,
@@ -255,24 +256,51 @@ let addProduct = (state, rawName, colour) => {
 
 let renameProduct = (state, productId, rawName) => {
 	let name = rawName.trim()
+	let product = findProduct(state, productId)
 
 	if (name === ``) return makeResult(false, `Enter a product name.`)
-	if (isNameTaken(state, name, productId)) return makeResult(false, `That product already exists.`)
+	if (isProductTaken(state, name, determineProductColour(product), productId)) return makeResult(false, `Another product already has that name and colour.`)
 
-	findProduct(state, productId).name = name
+	product.name = name
 
 	return makeResult(true, ``)
 }
 
 let setProductColour = (state, productId, colour) => {
 	let colourName = colour || null
+	let product = findProduct(state, productId)
 
 	if (colourName !== null && !productColourNames.includes(colourName)) return makeResult(false, `Choose brown, white or no colour.`)
+	if (isProductTaken(state, product.name, colourName, productId)) return makeResult(false, `Another product with that name already uses that colour.`)
 
-	findProduct(state, productId).colour = colourName
+	product.colour = colourName
 
 	return makeResult(true, ``)
 }
+
+// Changes the name and the colour together, so the combination is checked once and nothing is changed unless both are valid. Doing it as a rename followed by a colour change could be blocked halfway by the old combination.
+let updateProduct = (state, productId, rawName, colour) => {
+	let name = rawName.trim()
+	let colourName = colour || null
+	let product = findProduct(state, productId)
+
+	if (name === ``) return makeResult(false, `Enter a product name.`)
+	if (colourName !== null && !productColourNames.includes(colourName)) return makeResult(false, `Choose brown, white or no colour.`)
+	if (isProductTaken(state, name, colourName, productId)) return makeResult(false, `Another product already has that name and colour.`)
+
+	product.name = name
+	product.colour = colourName
+
+	return makeResult(true, ``)
+}
+
+// The order of same-named products: white first, then brown, then no colour.
+let productColourSortOrder = [`white`, `brown`]
+
+let makeProductColourRank = (product) => determineProductColour(product) === null ? productColourSortOrder.length : productColourSortOrder.indexOf(determineProductColour(product))
+
+// A sorted copy of the products for display, A to Z by name ignoring letter case, and for the same name by colour. The stored order is left alone.
+let sortProducts = (products) => [...products].sort((first, second) => first.name.toLowerCase().localeCompare(second.name.toLowerCase()) || makeProductColourRank(first) - makeProductColourRank(second))
 
 let makeBoxCountText = (boxCount) => `${boxCount} ${boxCount === 1 ? `box` : `boxes`}`
 

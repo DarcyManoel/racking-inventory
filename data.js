@@ -10,7 +10,7 @@ let floorAreaIndex = -1
 
 let storageKey = `freezerInventory`
 
-let storageVersion = 4
+let storageVersion = 5
 
 // Product colours, one row per choice, columns: stored value, label. An empty stored value means no colour has been assigned.
 let productColourRows = [[``, `No colour`], [`brown`, `Brown`], [`white`, `White`]]

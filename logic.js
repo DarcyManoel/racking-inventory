@@ -42,6 +42,7 @@ let makeEmptyState = () => {
 		nextProductId: 1,
 		products: [],
 		rooms: [makeRoom(`Room 1`, [makeRack(`Rack 1`, defaultLevelCount, defaultBayCount)])],
+		heldSpaces: [],
 		savedAtMillis: null
 	}
 }
@@ -67,11 +68,11 @@ let forEachSpace = (state, callback, roomIndexFilter) => state.rooms.forEach((ro
 	room.floorSpaces.forEach((space, spaceIndex) => callback(space, makeLocation(roomIndex, floorAreaIndex, spaceIndex)))
 })
 
-// Brings older saved data up to the current layout. Version 1 spaces held one product (productId plus batches), version 2 spaces hold a list of entries, version 3 racks have a name and their own size, and version 4 puts the racks into rooms. Versions 1 and 2 always had two unnamed racks of 4 levels and 4 bays, and older racks all go into one room named Room 1. Anything else is returned unchanged for the validator to judge.
+// Brings older saved data up to the current layout. Version 1 spaces held one product (productId plus batches), version 2 spaces hold a list of entries, version 3 racks have a name and their own size, version 4 puts the racks into rooms, and version 5 adds held pallets. Versions 1 and 2 always had two unnamed racks of 4 levels and 4 bays, and older racks all go into one room named Room 1. Anything else is returned unchanged for the validator to judge.
 let upgradeState = (data) => {
-	if (!data || typeof data !== `object` || !Array.isArray(data.racks)) return data
+	if (!data || typeof data !== `object`) return data
 
-	if (data.version === 1) {
+	if (Array.isArray(data.racks) && data.version === 1) {
 		data.racks.forEach(rack => {
 			if (!rack || !Array.isArray(rack.spaces)) return
 
@@ -89,7 +90,7 @@ let upgradeState = (data) => {
 		data.version = 2
 	}
 
-	if (data.version === 2) {
+	if (Array.isArray(data.racks) && data.version === 2) {
 		data.racks.forEach((rack, rackIndex) => {
 			if (!rack || typeof rack !== `object`) return
 
@@ -100,10 +101,15 @@ let upgradeState = (data) => {
 		data.version = 3
 	}
 
-	if (data.version === 3) {
+	if (Array.isArray(data.racks) && data.version === 3) {
 		data.rooms = [makeRoom(`Room 1`, data.racks)]
 		delete data.racks
 		data.version = 4
+	}
+
+	if (data.version === 4) {
+		data.heldSpaces = data.heldSpaces || []
+		data.version = 5
 	}
 
 	return data
@@ -273,15 +279,16 @@ let makeBoxCountText = (boxCount) => `${boxCount} ${boxCount === 1 ? `box` : `bo
 // Plain wording for a number of spaces, so one space is never written as 1 spaces.
 let makeSpaceCountText = (spaceCount) => `${spaceCount} ${spaceCount === 1 ? `space` : `spaces`}`
 
-// A product that is still in any space cannot be removed, so no entry is ever left pointing at a missing product.
+// A product that is still in any space, or on any held pallet, cannot be removed, so no entry is ever left pointing at a missing product.
 let removeProduct = (state, productId) => {
-	let spaceCount = 0
+	let heldCount = state.heldSpaces.filter(space => findEntry(space, productId) !== null).length
+	let spaceCount = heldCount
 
 	forEachSpace(state, space => {
 		if (findEntry(space, productId) !== null) spaceCount++
 	})
 
-	if (spaceCount > 0) return makeResult(false, `Still in ${makeSpaceCountText(spaceCount)}. Remove it from ${spaceCount === 1 ? `that space` : `those spaces`} first.`)
+	if (spaceCount > 0) return makeResult(false, `Still in ${makeSpaceCountText(spaceCount)}${heldCount > 0 ? ` (including held)` : ``}. Remove it from ${spaceCount === 1 ? `that space` : `those spaces`} first.`)
 
 	state.products = state.products.filter(product => product.id !== productId)
 
@@ -316,6 +323,38 @@ let emptySpace = (state, location) => {
 
 	space.entries = []
 	space.isUnfinished = false
+}
+
+// Holding moves what is in a space, and its unfinished mark, onto the held list, and leaves the space empty. Held pallets are not in any room until they are dropped.
+let holdSpace = (state, location) => {
+	let space = getSpace(state, location)
+
+	if (space.entries.length === 0) return makeResult(false, `There is nothing in this space to hold.`)
+
+	state.heldSpaces.push({
+		entries: space.entries,
+		isUnfinished: space.isUnfinished === true
+	})
+	space.entries = []
+	space.isUnfinished = false
+
+	return makeResult(true, ``)
+}
+
+// Dropping moves a held pallet, and its unfinished mark, into an empty available space and removes it from the held list.
+let dropHeldSpace = (state, location, heldIndex) => {
+	let space = getSpace(state, location)
+	let heldSpace = state.heldSpaces[heldIndex]
+
+	if (heldSpace === undefined) return makeResult(false, `That held pallet no longer exists.`)
+	if (space.isUnavailable === true) return makeResult(false, `This location is unavailable.`)
+	if (space.entries.length > 0) return makeResult(false, `Choose an empty space.`)
+
+	space.entries = heldSpace.entries
+	space.isUnfinished = heldSpace.isUnfinished === true
+	state.heldSpaces.splice(heldIndex, 1)
+
+	return makeResult(true, ``)
 }
 
 // An unfinished pallet is a partly built one. Only a space that holds something can be marked, and the mark is cleared when the space becomes empty.
@@ -401,29 +440,48 @@ let determineSpaceTone = (state, space) => {
 	return `none`
 }
 
-// Totals per product across every room, or only in the room at roomIndexFilter when one is given, with where each batch is. Entries with no batches are listed as locations with no batches, counted in uncountedSpaceCount, and add nothing to the total, so the total is a minimum.
+let makeEmptySummary = (product) => {
+	return {
+		product: product,
+		totalBoxes: 0,
+		uncountedSpaceCount: 0,
+		locations: []
+	}
+}
+
+let addSpaceToSummary = (summary, space, label) => {
+	let entry = findEntry(space, summary.product.id)
+
+	if (entry === null) return
+
+	if (entry.batches.length === 0) summary.uncountedSpaceCount++
+
+	summary.totalBoxes += entry.batches.reduce((total, batch) => total + batch.boxCount, 0)
+	summary.locations.push({
+		label: label,
+		batches: entry.batches
+	})
+}
+
+// Totals per product across every room and the held pallets, or only in the room at roomIndexFilter when one is given, with where each batch is. Held pallets are listed as a location called Held. Entries with no batches are listed as locations with no batches, counted in uncountedSpaceCount, and add nothing to the total, so the total is a minimum.
 let summariseStock = (state, roomIndexFilter) => {
 	return state.products.map(product => {
-		let summary = {
-			product: product,
-			totalBoxes: 0,
-			uncountedSpaceCount: 0,
-			locations: []
-		}
+		let summary = makeEmptySummary(product)
 
-		forEachSpace(state, (space, location) => {
-			let entry = findEntry(space, product.id)
+		forEachSpace(state, (space, location) => addSpaceToSummary(summary, space, makeSpaceLabel(state, location)), roomIndexFilter)
 
-			if (entry === null) return
+		if (roomIndexFilter === undefined) state.heldSpaces.forEach(space => addSpaceToSummary(summary, space, `Held`))
 
-			if (entry.batches.length === 0) summary.uncountedSpaceCount++
+		return summary
+	})
+}
 
-			summary.totalBoxes += entry.batches.reduce((total, batch) => total + batch.boxCount, 0)
-			summary.locations.push({
-				label: makeSpaceLabel(state, location),
-				batches: entry.batches
-			})
-		}, roomIndexFilter)
+// The same totals counting only the held pallets.
+let summariseHeldStock = (state) => {
+	return state.products.map(product => {
+		let summary = makeEmptySummary(product)
+
+		state.heldSpaces.forEach(space => addSpaceToSummary(summary, space, `Held`))
 
 		return summary
 	})
@@ -451,24 +509,28 @@ let consolidateBatches = (locations) => {
 	return consolidatedBatches
 }
 
-// Plain text of the stock list for pasting elsewhere. It starts with the timestamp, then one section per room that has stock, headed by the room name. Within a room only products in that room are listed, the most boxes first, with their batches combined and no locations. A total that has uncounted pallets is written as at least, and a product with only uncounted pallets as unknown. Rooms with no stocked products are left out.
+// The product lines of one section of the stock text: products with stock, the most boxes first, each followed by its combined batches. A total that has uncounted pallets is written as at least, and a product with only uncounted pallets as unknown.
+let makeStockSectionLines = (summaries) => {
+	let lines = []
+
+	summaries.filter(hasStock).sort((first, second) => second.totalBoxes - first.totalBoxes).forEach(summary => {
+		let uncountedText = `${makeSpaceCountText(summary.uncountedSpaceCount)} not counted`
+		let totalText = summary.uncountedSpaceCount === 0 ? makeBoxCountText(summary.totalBoxes) : summary.totalBoxes === 0 ? `count unknown, ${uncountedText}` : `at least ${makeBoxCountText(summary.totalBoxes)}, ${uncountedText}`
+
+		lines.push(`${makeProductHeading(summary.product)}: ${totalText}`)
+		consolidateBatches(summary.locations).forEach(batch => lines.push(`  ${batch.code} \u00D7 ${batch.boxCount}`))
+	})
+
+	return lines
+}
+
+// Plain text of the stock list for pasting elsewhere. It starts with the timestamp, then one section per room that has stock, headed by the room name, then a Held section for held pallets if there are any. Within a section only products in it are listed, the most boxes first, with their batches combined and no locations. Rooms with no stocked products are left out.
 let makeStockText = (state, timestampText) => {
 	let lines = [timestampText]
+	let sections = state.rooms.map((room, roomIndex) => [room.name, makeStockSectionLines(summariseStock(state, roomIndex))])
 
-	state.rooms.forEach((room, roomIndex) => {
-		let stockedSummaries = summariseStock(state, roomIndex).filter(hasStock).sort((first, second) => second.totalBoxes - first.totalBoxes)
-
-		if (stockedSummaries.length === 0) return
-
-		lines.push(``, room.name)
-		stockedSummaries.forEach(summary => {
-			let uncountedText = `${makeSpaceCountText(summary.uncountedSpaceCount)} not counted`
-			let totalText = summary.uncountedSpaceCount === 0 ? makeBoxCountText(summary.totalBoxes) : summary.totalBoxes === 0 ? `count unknown, ${uncountedText}` : `at least ${makeBoxCountText(summary.totalBoxes)}, ${uncountedText}`
-
-			lines.push(`${makeProductHeading(summary.product)}: ${totalText}`)
-			consolidateBatches(summary.locations).forEach(batch => lines.push(`  ${batch.code} \u00D7 ${batch.boxCount}`))
-		})
-	})
+	sections.push([`Held`, makeStockSectionLines(summariseHeldStock(state))])
+	sections.filter(([sectionName, sectionLines]) => sectionLines.length > 0).forEach(([sectionName, sectionLines]) => lines.push(``, sectionName, ...sectionLines))
 
 	return lines.join(`\n`)
 }
@@ -494,6 +556,8 @@ let validateImportedState = (data) => {
 	let productIds = data.products.map(product => product.id)
 
 	if (data.products.some(product => !Number.isInteger(product.id) || typeof product.name !== `string` || product.id >= data.nextProductId || (product.colour !== undefined && product.colour !== null && !productColourNames.includes(product.colour)))) return invalid
+
+	if (!Array.isArray(data.heldSpaces) || !data.heldSpaces.every(space => isValidSpace(space, productIds))) return invalid
 
 	for (let room of data.rooms) {
 		if (!room || typeof room.name !== `string` || room.name.trim() === `` || !Array.isArray(room.racks) || !Array.isArray(room.floorSpaces)) return invalid

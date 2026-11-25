@@ -57,6 +57,11 @@ button,
 	&.danger {
 		color: var(--colour-danger);
 	}
+
+	&:disabled {
+		cursor: default;
+		opacity: 0.5;
+	}
 }
 
 input,
@@ -302,6 +307,12 @@ main {
 
 .space-gap {
 	aspect-ratio: 1;
+}
+
+.held-row {
+	display: flex;
+	justify-content: flex-end;
+	margin-bottom: 12px;
 }
 
 .floor {
@@ -595,6 +606,10 @@ main {
 	inset: 0;
 	position: fixed;
 	z-index: 10;
+
+	&.held-backdrop {
+		z-index: 12;
+	}
 }
 
 .sheet {
@@ -618,6 +633,32 @@ main {
 		top: 8vh;
 		transform: translateX(-50%);
 		width: 480px;
+	}
+
+	&.held-modal {
+		z-index: 13;
+
+		@media (min-width: 800px) {
+			width: 520px;
+		}
+	}
+
+	>.sheet-actions {
+		display: flex;
+		gap: 8px;
+		margin-top: 12px;
+
+		>button {
+			flex: 1;
+		}
+	}
+
+	>.held-grid {
+		display: grid;
+		gap: var(--cell-gap);
+		grid-template-columns: repeat(auto-fill, var(--cell-size));
+		justify-content: start;
+		margin-top: 12px;
 	}
 
 	>.sheet-header {

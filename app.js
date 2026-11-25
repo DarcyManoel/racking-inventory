@@ -5,6 +5,7 @@ let viewState = {
 	roomIndex: 0,
 	rackIndex: 0,
 	openLocation: null,
+	heldModal: null,
 	message: ``,
 	loadWarning: ``,
 	saveFailed: false,
@@ -30,13 +31,8 @@ let handleResult = (result) => commitChange(result.isOk ? `` : result.message)
 
 let renderMessage = () => viewState.message === `` ? `` : `<p class="message">${makeSafeForHtml(viewState.message)}</p>`
 
-// The overview cell: each product name with its batches indented beneath. The tone class sets the colours. An unavailable location is drawn as an empty gap so the other spaces keep their positions. fitSpaceCell trims whatever does not fit.
-let renderSpaceCell = (roomIndex, rackIndex, spaceIndex) => {
-	let location = makeLocation(roomIndex, rackIndex, spaceIndex)
-	let space = getSpace(state, location)
-
-	if (space.isUnavailable === true) return `<span class="space-gap"></span>`
-
+// One tile showing a space's products with their batches indented beneath, used for rack and floor spaces and for held pallets. The tone class sets the colours. fitSpaceCell trims whatever does not fit.
+let renderSpaceTile = (space, onclickText, ariaLabel) => {
 	let lines = space.entries.map(entry => {
 		let batchLines = entry.batches.length === 0 ? `<span class="space-line batch uncounted">not counted</span>` : entry.batches.map(batch => `<span class="space-line batch">${makeSafeForHtml(batch.code)} \u00D7 ${batch.boxCount}</span>`).join(``)
 
@@ -44,7 +40,17 @@ let renderSpaceCell = (roomIndex, rackIndex, spaceIndex) => {
 	}).join(``)
 	let stateClass = determineSpaceStatus(space) === `empty` ? `empty` : space.isUnfinished === true ? `unfinished` : ``
 
-	return `<button class="space-cell tone-${determineSpaceTone(state, space)} ${stateClass}" onclick="openSpace(${roomIndex},${rackIndex},${spaceIndex})" aria-label="${makeSpaceLabel(state, location)}"><span class="space-lines">${lines}</span></button>`
+	return `<button class="space-cell tone-${determineSpaceTone(state, space)} ${stateClass}" onclick="${onclickText}" aria-label="${makeSafeForHtml(ariaLabel)}"><span class="space-lines">${lines}</span></button>`
+}
+
+// The overview cell of a rack or floor space. An unavailable location is drawn as an empty gap so the other spaces keep their positions.
+let renderSpaceCell = (roomIndex, rackIndex, spaceIndex) => {
+	let location = makeLocation(roomIndex, rackIndex, spaceIndex)
+	let space = getSpace(state, location)
+
+	if (space.isUnavailable === true) return `<span class="space-gap"></span>`
+
+	return renderSpaceTile(space, `openSpace(${roomIndex},${rackIndex},${spaceIndex})`, makeSpaceLabel(state, location))
 }
 
 // Hides lines from the end until the rest fit, then ends the cell with an ellipsis line so it is clear there is more. It measures the real layout, so it runs after every render and on resize.
@@ -138,7 +144,9 @@ let renderOverviewTab = () => {
 	let racks = room.racks.map((rack, rackIndex) => renderRack(viewState.roomIndex, rackIndex)).join(``)
 	let rackList = room.racks.length === 0 ? `<p class="note">This room has no racks. Add one on the Rooms tab, or use the floor below.</p>` : `<div class="rack-list">${racks}</div>`
 
-	return `${hint}${roomSwitch}${rackSwitch}${rackList}${renderFloor(viewState.roomIndex)}`
+	let heldRow = `<div class="held-row"><button onclick="openHeldView()">Held (${state.heldSpaces.length})</button></div>`
+
+	return `${hint}${heldRow}${roomSwitch}${rackSwitch}${rackList}${renderFloor(viewState.roomIndex)}`
 }
 
 // Products with stock come first, then a separate section for products in no space.
@@ -198,9 +206,23 @@ let renderSheet = () => {
 	let unfinishedControl = space.entries.length === 0 ? `` : `<label class="check-row"><input type="checkbox"${space.isUnfinished === true ? ` checked` : ``} onchange="toggleSpaceUnfinished(this.checked)">Unfinished pallet</label>`
 	let unavailableControl = isFloor || space.entries.length > 0 ? `` : `<label class="check-row"><input type="checkbox"${space.isUnavailable === true ? ` checked` : ``} onchange="toggleSpaceUnavailable(this.checked)">Location unavailable (hides this space)</label>${space.isUnavailable === true ? `<p class="note">To bring it back later, open the Rooms tab and choose Restore.</p>` : ``}`
 	let emptyButton = space.entries.length === 0 ? `` : `<button class="danger" onclick="clearSpace()">Empty this space</button>`
+	let holdDropControl = space.isUnavailable === true ? `` : space.entries.length > 0 ? `<div class="sheet-actions"><button onclick="holdSpaceHere()">Hold</button></div>` : `<div class="sheet-actions"><button class="primary" onclick="openDropModal()"${state.heldSpaces.length === 0 ? ` disabled` : ``}>Drop (${state.heldSpaces.length})</button></div>`
 	let removeFloorButton = isFloor && space.entries.length === 0 ? `<button class="danger" onclick="removeFloorSpaceHere()">Remove this floor space</button>` : ``
 
-	return `<div class="sheet-backdrop" onclick="closeSheet()"></div><div class="sheet"><div class="sheet-header"><h2>${makeSafeForHtml(makeSpaceLabel(state, location))}</h2><button onclick="closeSheet()" aria-label="Close">\u2715</button></div>${renderMessage()}${entryBlocks}${unfinishedControl}${addProductControl}${unavailableControl}${emptyButton}${removeFloorButton}</div>`
+	return `<div class="sheet-backdrop" onclick="closeSheet()"></div><div class="sheet"><div class="sheet-header"><h2>${makeSafeForHtml(makeSpaceLabel(state, location))}</h2><button onclick="closeSheet()" aria-label="Close">\u2715</button></div>${holdDropControl}${viewState.heldModal === null ? renderMessage() : ``}${entryBlocks}${unfinishedControl}${addProductControl}${unavailableControl}${emptyButton}${removeFloorButton}</div>`
+}
+
+// The held pallets drawn as tiles like a rack. When opened from an empty space's sheet (a target location is set) tapping a tile drops that pallet there. Otherwise it is for looking only.
+let renderHeldModal = () => {
+	if (viewState.heldModal === null) return ``
+
+	let targetLocation = viewState.heldModal.targetLocation
+	let isDropMode = targetLocation !== null
+	let title = isDropMode ? `Drop into ${makeSpaceLabel(state, targetLocation)}` : `Held (${state.heldSpaces.length})`
+	let tiles = state.heldSpaces.map((space, heldIndex) => renderSpaceTile(space, isDropMode ? `dropHeldSpaceHere(${heldIndex})` : `noteHeldView()`, `Held pallet ${heldIndex + 1}`)).join(``)
+	let content = state.heldSpaces.length === 0 ? `<p class="note">Nothing is held. Open an occupied space and tap Hold to move its pallet here.</p>` : `<div class="held-grid">${tiles}</div>`
+
+	return `<div class="sheet-backdrop held-backdrop" onclick="closeHeldModal()"></div><div class="sheet held-modal"><div class="sheet-header"><h2>${makeSafeForHtml(title)}</h2><button onclick="closeHeldModal()" aria-label="Close">\u2715</button></div>${isDropMode ? `<p class="note">Tap a held pallet to place it here.</p>` : ``}${renderMessage()}${content}</div>`
 }
 
 let render = () => {
@@ -218,7 +240,7 @@ let render = () => {
 	let warning = viewState.loadWarning === `` ? `` : `<p class="message">${makeSafeForHtml(viewState.loadWarning)}</p>`
 	let tabButtons = [[`overview`, `Overview`], [`stock`, `Stock`], [`products`, `Products`], [`rooms`, `Rooms`]].map(([tabName, tabLabel]) => `<button class="${viewState.tab === tabName ? `selected` : ``}" onclick="switchTab(\`${tabName}\`)">${tabLabel}</button>`).join(``)
 
-	document.getElementById(`app`).innerHTML = `<header class="app-header"><h1>Racking Inventory</h1><div class="header-actions"><span class="save-status ${viewState.saveFailed ? `failed` : ``}">${saveText}</span><button id="copy-stock-button" onclick="copyStockText()">${makeSafeForHtml(viewState.copyLabel)}</button></div></header>${warning}<main>${tabContent}</main><nav class="tab-bar">${tabButtons}</nav>${renderSheet()}`
+	document.getElementById(`app`).innerHTML = `<header class="app-header"><h1>Racking Inventory</h1><div class="header-actions"><span class="save-status ${viewState.saveFailed ? `failed` : ``}">${saveText}</span><button id="copy-stock-button" onclick="copyStockText()">${makeSafeForHtml(viewState.copyLabel)}</button></div></header>${warning}<main>${tabContent}</main><nav class="tab-bar">${tabButtons}</nav>${renderSheet()}${renderHeldModal()}`
 
 	sheetElement = document.querySelector(`.sheet`)
 	if (sheetElement) sheetElement.scrollTop = sheetScrollTopPx
@@ -256,6 +278,52 @@ let closeSheet = () => {
 	viewState.openLocation = null
 	viewState.message = ``
 	render()
+}
+
+let holdSpaceHere = () => {
+	let result = holdSpace(state, viewState.openLocation)
+
+	if (result.isOk) viewState.openLocation = null
+
+	handleResult(result)
+}
+
+let openDropModal = () => {
+	viewState.heldModal = {
+		targetLocation: viewState.openLocation
+	}
+	viewState.message = ``
+	render()
+}
+
+let openHeldView = () => {
+	viewState.heldModal = {
+		targetLocation: null
+	}
+	viewState.message = ``
+	render()
+}
+
+let closeHeldModal = () => {
+	viewState.heldModal = null
+	viewState.message = ``
+	render()
+}
+
+let noteHeldView = () => {
+	viewState.message = `Open an empty space and tap Drop to place a held pallet.`
+	render()
+}
+
+let dropHeldSpaceHere = (heldIndex) => {
+	let result = dropHeldSpace(state, viewState.heldModal.targetLocation, heldIndex)
+
+	if (result.isOk) {
+		viewState.heldModal = null
+		viewState.openLocation = null
+	}
+
+	handleResult(result)
 }
 
 // Adds a floor space and opens it straight away so it can be filled in.
@@ -393,6 +461,7 @@ let importBackup = (event) => {
 			state = importedState
 			viewState.rackScrollPositions = {}
 			viewState.openLocation = null
+			viewState.heldModal = null
 			commitChange(`Backup imported.`)
 		} catch (error) {
 			commitChange(`That file could not be read as JSON.`)
@@ -463,5 +532,5 @@ render()
 
 // Refits the overview cells when the window size or orientation changes, unless the edit sheet is open and a re-render would interrupt typing.
 window.addEventListener(`resize`, () => {
-	if (viewState.openLocation === null) render()
+	if (viewState.openLocation === null && viewState.heldModal === null) render()
 })

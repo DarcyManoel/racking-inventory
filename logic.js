@@ -59,8 +59,10 @@ let isFloorLocation = (location) => location.rackIndex === floorAreaIndex
 
 let getSpace = (state, location) => isFloorLocation(location) ? state.rooms[location.roomIndex].floorSpaces[location.spaceIndex] : state.rooms[location.roomIndex].racks[location.rackIndex].spaces[location.spaceIndex]
 
-// Calls the callback with every space in every room, rack spaces first and then floor spaces, together with its location.
-let forEachSpace = (state, callback) => state.rooms.forEach((room, roomIndex) => {
+// Calls the callback with every space in every room, or only in the room at roomIndexFilter when one is given, rack spaces first and then floor spaces, together with its location.
+let forEachSpace = (state, callback, roomIndexFilter) => state.rooms.forEach((room, roomIndex) => {
+	if (roomIndexFilter !== undefined && roomIndex !== roomIndexFilter) return
+
 	room.racks.forEach((rack, rackIndex) => rack.spaces.forEach((space, spaceIndex) => callback(space, makeLocation(roomIndex, rackIndex, spaceIndex))))
 	room.floorSpaces.forEach((space, spaceIndex) => callback(space, makeLocation(roomIndex, floorAreaIndex, spaceIndex)))
 })
@@ -399,8 +401,8 @@ let determineSpaceTone = (state, space) => {
 	return `none`
 }
 
-// Totals per product across every room, with where each batch is. Entries with no batches are listed as locations with no batches, counted in uncountedSpaceCount, and add nothing to the total, so the total is a minimum.
-let summariseStock = (state) => {
+// Totals per product across every room, or only in the room at roomIndexFilter when one is given, with where each batch is. Entries with no batches are listed as locations with no batches, counted in uncountedSpaceCount, and add nothing to the total, so the total is a minimum.
+let summariseStock = (state, roomIndexFilter) => {
 	return state.products.map(product => {
 		let summary = {
 			product: product,
@@ -421,7 +423,7 @@ let summariseStock = (state) => {
 				label: makeSpaceLabel(state, location),
 				batches: entry.batches
 			})
-		})
+		}, roomIndexFilter)
 
 		return summary
 	})
@@ -432,27 +434,41 @@ let hasStock = (summary) => summary.locations.length > 0
 
 let makeProductHeading = (product) => determineProductColour(product) === null ? product.name : `${product.name} (${determineProductColour(product)})`
 
-// Plain text of the stock list for pasting elsewhere. Products with stock come first, then products with no stock. A total that has uncounted pallets is written as at least, and a product with only uncounted pallets as unknown.
-let makeStockText = (state, dateText) => {
-	let lines = [`Racking Inventory stock, ${dateText}`]
-	let summaries = summariseStock(state)
+// Adds up the batches of one product across its locations, treating batch codes that differ only in letter case as the same batch and keeping the casing seen first.
+let consolidateBatches = (locations) => {
+	let consolidatedBatches = []
 
-	if (state.products.length === 0) lines.push(``, `No products yet.`)
+	locations.forEach(location => location.batches.forEach(batch => {
+		let matchingBatch = consolidatedBatches.find(consolidatedBatch => consolidatedBatch.code.toLowerCase() === batch.code.toLowerCase())
 
-	summaries.filter(hasStock).forEach(summary => {
-		let uncountedText = `${makeSpaceCountText(summary.uncountedSpaceCount)} not counted`
-		let totalText = summary.uncountedSpaceCount === 0 ? makeBoxCountText(summary.totalBoxes) : summary.totalBoxes === 0 ? `count unknown, ${uncountedText}` : `at least ${makeBoxCountText(summary.totalBoxes)}, ${uncountedText}`
+		if (matchingBatch === undefined) consolidatedBatches.push({
+			code: batch.code,
+			boxCount: batch.boxCount
+		})
+		else matchingBatch.boxCount += batch.boxCount
+	}))
 
-		lines.push(``, `${makeProductHeading(summary.product)}: ${totalText}`)
-		summary.locations.forEach(location => lines.push(`  ${location.label}: ${location.batches.length === 0 ? `not counted` : location.batches.map(batch => `${batch.code} \u00D7 ${batch.boxCount}`).join(`, `)}`))
+	return consolidatedBatches
+}
+
+// Plain text of the stock list for pasting elsewhere. It starts with the timestamp, then one section per room that has stock, headed by the room name. Within a room only products in that room are listed, the most boxes first, with their batches combined and no locations. A total that has uncounted pallets is written as at least, and a product with only uncounted pallets as unknown. Rooms with no stocked products are left out.
+let makeStockText = (state, timestampText) => {
+	let lines = [timestampText]
+
+	state.rooms.forEach((room, roomIndex) => {
+		let stockedSummaries = summariseStock(state, roomIndex).filter(hasStock).sort((first, second) => second.totalBoxes - first.totalBoxes)
+
+		if (stockedSummaries.length === 0) return
+
+		lines.push(``, room.name)
+		stockedSummaries.forEach(summary => {
+			let uncountedText = `${makeSpaceCountText(summary.uncountedSpaceCount)} not counted`
+			let totalText = summary.uncountedSpaceCount === 0 ? makeBoxCountText(summary.totalBoxes) : summary.totalBoxes === 0 ? `count unknown, ${uncountedText}` : `at least ${makeBoxCountText(summary.totalBoxes)}, ${uncountedText}`
+
+			lines.push(`${makeProductHeading(summary.product)}: ${totalText}`)
+			consolidateBatches(summary.locations).forEach(batch => lines.push(`  ${batch.code} \u00D7 ${batch.boxCount}`))
+		})
 	})
-
-	let withoutStock = summaries.filter(summary => !hasStock(summary))
-
-	if (withoutStock.length > 0) {
-		lines.push(``, `No stock:`)
-		withoutStock.forEach(summary => lines.push(`  ${makeProductHeading(summary.product)}`))
-	}
 
 	return lines.join(`\n`)
 }

@@ -441,7 +441,14 @@ let copyWithHiddenTextBox = (text) => {
 }
 
 let copyStockText = () => {
-	let stockText = makeStockText(state, new Date().toLocaleString(`en-AU`))
+	let timestampText = new Date().toLocaleString(`en-AU`, {
+		year: `numeric`,
+		month: `2-digit`,
+		day: `2-digit`,
+		hour: `numeric`,
+		minute: `2-digit`
+	})
+	let stockText = makeStockText(state, timestampText)
 	let showResult = (didCopy) => flashCopyLabel(didCopy ? `Copied` : `Copy failed`)
 
 	if (navigator.clipboard && navigator.clipboard.writeText) navigator.clipboard.writeText(stockText).then(() => showResult(true), () => showResult(copyWithHiddenTextBox(stockText)))

@@ -5,6 +5,7 @@ let viewState = {
 	roomIndex: 0,
 	rackIndex: 0,
 	openLocation: null,
+	searchQuery: ``,
 	editingProductId: null,
 	heldModal: null,
 	message: ``,
@@ -34,7 +35,7 @@ let handleResult = (result) => commitChange(result.isOk ? `` : result.message)
 let renderMessage = () => viewState.message === `` ? `` : `<p class="message">${makeSafeForHtml(viewState.message)}</p>`
 
 // One tile showing a space's products with their batches indented beneath, used for rack and floor spaces and for held pallets. The tone class sets the colours. fitSpaceCell trims whatever does not fit.
-let renderSpaceTile = (space, onclickText, ariaLabel) => {
+let renderSpaceTile = (space, onclickText, ariaLabel, searchClass) => {
 	let lines = space.entries.map(entry => {
 		let batchLines = entry.batches.length === 0 ? `<span class="space-line batch uncounted">not counted</span>` : entry.batches.map(batch => `<span class="space-line batch">${makeSafeForHtml(makeBatchText(batch, false))}</span>`).join(``)
 
@@ -42,17 +43,20 @@ let renderSpaceTile = (space, onclickText, ariaLabel) => {
 	}).join(``)
 	let stateClass = determineSpaceStatus(space) === `empty` ? `empty` : space.isUnfinished === true ? `unfinished` : ``
 
-	return `<button class="space-cell tone-${determineSpaceTone(state, space)} ${stateClass}" onclick="${onclickText}" aria-label="${makeSafeForHtml(ariaLabel)}"><span class="space-lines">${lines}</span></button>`
+	return `<button class="space-cell tone-${determineSpaceTone(state, space)} ${stateClass} ${searchClass || ``}" onclick="${onclickText}" aria-label="${makeSafeForHtml(ariaLabel)}"><span class="space-lines">${lines}</span></button>`
 }
 
 // The overview cell of a rack or floor space. An unavailable location is drawn as an empty gap so the other spaces keep their positions.
+// The class that highlights or dims an overview cell while a search is active. Without a search every cell is drawn normally.
+let makeSearchClass = (isMatch) => viewState.searchQuery.trim() === `` ? `` : isMatch ? `search-match` : `search-dimmed`
+
 let renderSpaceCell = (roomIndex, rackIndex, spaceIndex) => {
 	let location = makeLocation(roomIndex, rackIndex, spaceIndex)
 	let space = getSpace(state, location)
 
 	if (space.isUnavailable === true) return `<span class="space-gap"></span>`
 
-	return renderSpaceTile(space, `openSpace(${roomIndex},${rackIndex},${spaceIndex})`, makeSpaceLabel(state, location))
+	return renderSpaceTile(space, `openSpace(${roomIndex},${rackIndex},${spaceIndex})`, makeSpaceLabel(state, location), makeSearchClass(doesSpaceMatchSearch(state, space, viewState.searchQuery)))
 }
 
 // Hides lines from the end until the rest fit, then ends the cell with an ellipsis line so it is clear there is more. It measures the real layout, so it runs after every render and on resize.
@@ -133,14 +137,18 @@ let renderRack = (roomIndex, rackIndex) => {
 let renderFloor = (roomIndex) => {
 	let cells = state.rooms[roomIndex].floorSpaces.map((space, spaceIndex) => renderSpaceCell(roomIndex, floorAreaIndex, spaceIndex)).join(``)
 
-	return `<section class="floor"><h2>Floor</h2><div class="floor-grid">${cells}<button class="space-cell empty add-tile" onclick="addFloorSpaceToRoom(${roomIndex})" aria-label="Add floor space">+ Add floor space</button></div></section>`
+	return `<section class="floor"><h2>Floor</h2><div class="floor-grid">${cells}<button class="space-cell empty add-tile ${makeSearchClass(false)}" onclick="addFloorSpaceToRoom(${roomIndex})" aria-label="Add floor space">+ Add floor space</button></div></section>`
 }
 
-let renderOverviewTab = () => {
+// The match count shown on a room or rack button, left out when nothing matches so the buttons that hold matching stock stand out.
+let makeMatchCountText = (matchCount) => matchCount > 0 ? ` (${matchCount})` : ``
+
+// Everything on the Overview tab below the search box. It is drawn on its own while typing, so the search box keeps its focus and cursor.
+let renderOverviewResults = () => {
 	let room = state.rooms[viewState.roomIndex]
-	let roomButtons = state.rooms.map((otherRoom, roomIndex) => `<button class="${roomIndex === viewState.roomIndex ? `selected` : ``}" onclick="switchRoom(${roomIndex})">${makeSafeForHtml(otherRoom.name)}</button>`).join(``)
+	let roomButtons = state.rooms.map((otherRoom, roomIndex) => `<button class="${roomIndex === viewState.roomIndex ? `selected` : ``}" onclick="switchRoom(${roomIndex})">${makeSafeForHtml(otherRoom.name)}${makeMatchCountText(countMatchingSpaces(state, otherRoom.racks.flatMap(otherRack => otherRack.spaces).concat(otherRoom.floorSpaces), viewState.searchQuery))}</button>`).join(``)
 	let roomSwitch = state.rooms.length > 1 ? `<div class="room-switch" data-switch-name="room" onscroll="handleSwitchScroll(this)">${roomButtons}</div>` : ``
-	let rackButtons = room.racks.map((rack, rackIndex) => `<button class="${rackIndex === viewState.rackIndex ? `selected` : ``}" onclick="switchRack(${rackIndex})">${makeSafeForHtml(rack.name)}</button>`).join(``)
+	let rackButtons = room.racks.map((rack, rackIndex) => `<button class="${rackIndex === viewState.rackIndex ? `selected` : ``}" onclick="switchRack(${rackIndex})">${makeSafeForHtml(rack.name)}${makeMatchCountText(countMatchingSpaces(state, rack.spaces, viewState.searchQuery))}</button>`).join(``)
 	let rackSwitch = `<div class="rack-switch" data-switch-name="rack" onscroll="handleSwitchScroll(this)">${rackButtons === `` ? `<button disabled>No racks</button>` : rackButtons}</div>`
 	let hint = state.products.length === 0 ? `<p class="message">Add your products on the Products tab, then tap a space to fill it.</p>` : ``
 	let racks = room.racks.map((rack, rackIndex) => renderRack(viewState.roomIndex, rackIndex)).join(``)
@@ -150,6 +158,8 @@ let renderOverviewTab = () => {
 
 	return `${hint}${heldRow}${roomSwitch}${rackSwitch}${rackList}${renderFloor(viewState.roomIndex)}`
 }
+
+let renderOverviewTab = () => `<input class="search-input" type="search" id="search-input" placeholder="Search product or batch\u2026" autocomplete="off" value="${makeSafeForHtml(viewState.searchQuery)}" oninput="handleSearchInput(this.value)"><div id="overview-results">${renderOverviewResults()}</div>`
 
 // Products with stock come first, then a separate section for products in no space.
 let renderStockTab = () => {
@@ -236,6 +246,15 @@ let renderHeldModal = () => {
 	let content = state.heldSpaces.length === 0 ? `<p class="note">Nothing is held. Open an occupied space and tap Hold to move its pallet here.</p>` : `<div class="held-grid">${tiles}</div>`
 
 	return `<div class="sheet-backdrop held-backdrop" onclick="closeHeldModal()"></div><div class="sheet held-modal"><div class="sheet-header"><h2>${makeSafeForHtml(title)}</h2><button onclick="closeHeldModal()" aria-label="Close">\u2715</button></div>${isDropMode ? `<p class="note">Tap a held pallet to place it here.</p>` : ``}${renderMessage()}${content}</div>`
+}
+
+// Redraws only the part of the Overview under the search box, so the box itself is never replaced while the person types.
+let handleSearchInput = (searchText) => {
+	viewState.searchQuery = searchText
+	document.getElementById(`overview-results`).innerHTML = renderOverviewResults()
+	restoreSwitchScrolls()
+	restoreRackScrolls()
+	document.querySelectorAll(`.space-cell`).forEach(fitSpaceCell)
 }
 
 let render = () => {

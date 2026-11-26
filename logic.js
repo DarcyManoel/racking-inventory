@@ -610,3 +610,16 @@ let validateImportedState = (data) => {
 
 	return makeResult(true, ``)
 }
+
+// Whether a space should be highlighted for the search text. An empty search matches every space, so no filter is active. Empty and unavailable spaces never match an active search. The text is matched anywhere in a product name or a batch code, ignoring letter case.
+let doesSpaceMatchSearch = (state, space, query) => {
+	let normalisedQuery = query.trim().toLowerCase()
+
+	if (normalisedQuery === ``) return true
+	if (space.isUnavailable === true) return false
+
+	return space.entries.some(entry => findProduct(state, entry.productId).name.toLowerCase().includes(normalisedQuery) || entry.batches.some(batch => batch.code.toLowerCase().includes(normalisedQuery)))
+}
+
+// How many of the given spaces match an active search, or 0 when there is no search, so the tab buttons only show counts while searching.
+let countMatchingSpaces = (state, spaces, query) => query.trim() === `` ? 0 : spaces.filter(space => doesSpaceMatchSearch(state, space, query)).length

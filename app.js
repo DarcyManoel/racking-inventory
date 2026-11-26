@@ -5,6 +5,7 @@ let viewState = {
 	roomIndex: 0,
 	rackIndex: 0,
 	openLocation: null,
+	editingProductId: null,
 	heldModal: null,
 	message: ``,
 	loadWarning: ``,
@@ -196,10 +197,15 @@ let renderSheet = () => {
 	let isFloor = isFloorLocation(location)
 	let space = getSpace(state, location)
 	let entryBlocks = space.entries.map(entry => {
-		let batchRows = entry.batches.map((batch, batchIndex) => `<li class="batch-row">${batch.code === `` ? `<span class="batch-code unbatched">(no batch)</span>` : `<span class="batch-code">${makeSafeForHtml(batch.code)}</span>`}<button onclick="nudgeBatch(${entry.productId},${batchIndex},-1)" aria-label="Remove one box">\u2212</button><span class="batch-count">${batch.boxCount}</span><button onclick="nudgeBatch(${entry.productId},${batchIndex},1)" aria-label="Add one box">+</button><button class="danger" onclick="removeBatch(${entry.productId},${batchIndex})" aria-label="Delete batch">\u2715</button></li>`).join(``)
+		let isEditing = viewState.editingProductId === entry.productId
+		let product = findProduct(state, entry.productId)
+		let batchLabel = (batch) => batch.code === `` ? `<span class="batch-code unbatched">(no batch)</span>` : `<span class="batch-code">${makeSafeForHtml(batch.code)}</span>`
+		let batchRows = entry.batches.map((batch, batchIndex) => isEditing ? `<li class="batch-row">${batchLabel(batch)}<button onclick="nudgeBatch(${entry.productId},${batchIndex},-1)" aria-label="Remove one box">\u2212</button><span class="batch-count">${batch.boxCount}</span><button onclick="nudgeBatch(${entry.productId},${batchIndex},1)" aria-label="Add one box">+</button><button class="danger" onclick="removeBatch(${entry.productId},${batchIndex})" aria-label="Delete batch">\u2715</button></li>` : `<li class="batch-row compact">${batchLabel(batch)}<span class="batch-count">${batch.boxCount}</span></li>`).join(``)
 		let uncounted = entry.batches.length === 0 ? `<p class="note">No batches yet, so the box count is unknown.</p>` : ``
+		let actions = isEditing ? `<button onclick="finishEntryEdit()">Done</button><button class="danger" onclick="removeEntryConfirm(${entry.productId})">Remove</button>` : `<button onclick="startEntryEdit(${entry.productId})">Edit</button>`
+		let addBatchForm = isEditing ? `<form class="add-row" onsubmit="submitBatch(${entry.productId});return false"><input id="batch-code-input-${entry.productId}" placeholder="Batch code (optional)" autocomplete="off"><input id="batch-count-input-${entry.productId}" type="number" inputmode="numeric" min="1" value="1"><button class="primary">Add batch</button></form>` : ``
 
-		return `<section class="entry-block"><div class="entry-header"><h3>${makeSwatchHtml(findProduct(state, entry.productId))}${makeSafeForHtml(findProduct(state, entry.productId).name)}</h3><button class="danger" onclick="removeEntryConfirm(${entry.productId})">Remove</button></div>${uncounted}<ul class="batch-list">${batchRows}</ul><form class="add-row" onsubmit="submitBatch(${entry.productId});return false"><input id="batch-code-input-${entry.productId}" placeholder="Batch code (optional)" autocomplete="off"><input id="batch-count-input-${entry.productId}" type="number" inputmode="numeric" min="1" value="1"><button class="primary">Add batch</button></form></section>`
+		return `<section class="entry-block ${isEditing ? `` : `compact`}"><div class="entry-header"><h3>${makeSwatchHtml(product)}${makeSafeForHtml(product.name)}</h3><div class="entry-actions">${actions}</div></div>${uncounted}<ul class="batch-list">${batchRows}</ul>${addBatchForm}</section>`
 	}).join(``)
 	let availableProducts = state.products.filter(product => findEntry(space, product.id) === null)
 	let options = `<option value="">Choose a product\u2026</option>` + sortProducts(availableProducts).map(product => `<option value="${product.id}">${makeSafeForHtml(makeProductHeading(product))}</option>`).join(``)
@@ -277,6 +283,7 @@ let switchRack = (rackIndex) => {
 
 let openSpace = (roomIndex, rackIndex, spaceIndex) => {
 	viewState.openLocation = makeLocation(roomIndex, rackIndex, spaceIndex)
+	viewState.editingProductId = null
 	viewState.message = ``
 	render()
 }
@@ -286,6 +293,7 @@ let closeSheet = () => {
 	let wasFloorSpaceRemoved = removeFloorSpaceIfEmpty(state, viewState.openLocation)
 
 	viewState.openLocation = null
+	viewState.editingProductId = null
 
 	if (wasFloorSpaceRemoved) return commitChange(``)
 
@@ -358,7 +366,22 @@ let addFloorSpaceToRoom = (roomIndex) => {
 let addProductToSpaceChosen = (value) => {
 	if (value === ``) return
 
-	handleResult(addProductToSpace(state, viewState.openLocation, Number(value)))
+	let result = addProductToSpace(state, viewState.openLocation, Number(value))
+
+	if (result.isOk) viewState.editingProductId = Number(value)
+
+	handleResult(result)
+}
+
+// Only one product of the open space is edited at a time, so starting on another product collapses the previous one back to the read-only view.
+let startEntryEdit = (productId) => {
+	viewState.editingProductId = productId
+	render()
+}
+
+let finishEntryEdit = () => {
+	viewState.editingProductId = null
+	render()
 }
 
 let toggleSpaceUnfinished = (isChecked) => handleResult(setSpaceUnfinished(state, viewState.openLocation, isChecked))

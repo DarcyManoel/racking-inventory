@@ -700,10 +700,26 @@ main {
 		margin-top: 12px;
 		padding-top: 12px;
 
+		&.compact {
+			margin-top: 4px;
+			padding-top: 4px;
+
+			>.batch-list {
+				margin: 0;
+			}
+		}
+
 		>.entry-header {
 			align-items: center;
 			display: flex;
+			gap: 8px;
 			justify-content: space-between;
+
+			>.entry-actions {
+				display: flex;
+				flex: none;
+				gap: 8px;
+			}
 
 			>h3 {
 				font-size: 16px;
@@ -733,6 +749,10 @@ main {
 						color: var(--colour-muted);
 						font-weight: 400;
 					}
+				}
+
+				&.compact {
+					padding: 2px 0;
 				}
 
 				>.batch-count {

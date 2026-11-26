@@ -551,29 +551,30 @@ let consolidateBatches = (locations) => {
 	return consolidatedBatches
 }
 
-// The product lines of one section of the stock text: products with stock, the most boxes first, each followed by its combined batches. A total that has uncounted pallets is written as at least, and a product with only uncounted pallets as unknown.
-let makeStockSectionLines = (summaries) => {
+// The product lines of one section of the stock text: products with stock, the product holding the oldest dated batch first (products with no dated batch last, and equal ones the most boxes first), each followed by its combined batches oldest first with a note on any batch that is expired or close to expiry. A total that has uncounted pallets is written as at least, and a product with only uncounted pallets as unknown.
+let makeStockSectionLines = (summaries, now = new Date()) => {
 	let lines = []
+	let makeOldestTime = (summary) => makeOldestBatchTime(consolidateBatches(summary.locations), now)
 
-	summaries.filter(hasStock).sort((first, second) => second.totalBoxes - first.totalBoxes).forEach(summary => {
+	summaries.filter(hasStock).sort((first, second) => makeOldestTime(first) === makeOldestTime(second) ? second.totalBoxes - first.totalBoxes : makeOldestTime(first) - makeOldestTime(second)).forEach(summary => {
 		let uncountedText = `${makeSpaceCountText(summary.uncountedSpaceCount)} not counted`
 		let totalText = summary.uncountedSpaceCount === 0 ? makeBoxCountText(summary.totalBoxes) : summary.totalBoxes === 0 ? `count unknown, ${uncountedText}` : `at least ${makeBoxCountText(summary.totalBoxes)}, ${uncountedText}`
 
 		lines.push(`${makeProductHeading(summary.product)}: ${totalText}`)
-		let consolidatedBatches = consolidateBatches(summary.locations)
+		let consolidatedBatches = sortBatchesOldestFirst(consolidateBatches(summary.locations), now)
 
-		consolidatedBatches.forEach(batch => lines.push(`  ${makeBatchText(batch, consolidatedBatches.length > 1)}`))
+		consolidatedBatches.forEach(batch => lines.push(`  ${makeBatchText(batch, consolidatedBatches.length > 1)}${makeExpiryNoteText(parseBatchExpiry(batch.code, now))}`))
 	})
 
 	return lines
 }
 
-// Plain text of the stock list for pasting elsewhere. It starts with the timestamp, then one section per room that has stock, headed by the room name, then a Held section for held pallets if there are any. Within a section only products in it are listed, the most boxes first, with their batches combined and no locations. Rooms with no stocked products are left out.
-let makeStockText = (state, timestampText) => {
+// Plain text of the stock list for pasting elsewhere. It starts with the timestamp, then one section per room that has stock, headed by the room name, then a Held section for held pallets if there are any. Within a section only products in it are listed, the product with the oldest batch first, with their batches combined, oldest first, and no locations. Rooms with no stocked products are left out.
+let makeStockText = (state, timestampText, now = new Date()) => {
 	let lines = [timestampText]
-	let sections = state.rooms.map((room, roomIndex) => [room.name, makeStockSectionLines(summariseStock(state, roomIndex))])
+	let sections = state.rooms.map((room, roomIndex) => [room.name, makeStockSectionLines(summariseStock(state, roomIndex), now)])
 
-	sections.push([`Held`, makeStockSectionLines(summariseHeldStock(state))])
+	sections.push([`Held`, makeStockSectionLines(summariseHeldStock(state), now)])
 	sections.filter(([sectionName, sectionLines]) => sectionLines.length > 0).forEach(([sectionName, sectionLines]) => lines.push(``, sectionName, ...sectionLines))
 
 	return lines.join(`\n`)
@@ -623,3 +624,81 @@ let doesSpaceMatchSearch = (state, space, query) => {
 
 // How many of the given spaces match an active search, or 0 when there is no search, so the tab buttons only show counts while searching.
 let countMatchingSpaces = (state, spaces, query) => query.trim() === `` ? 0 : spaces.filter(space => doesSpaceMatchSearch(state, space, query)).length
+
+let millisPerDay = 86400000
+
+// A batch is expiring soon when it expires within about three months.
+let expiringSoonDays = 92
+
+// A production date this many days in the future is still read as this year, to allow for a clock that is a little behind, instead of ten years ago.
+let batchFutureBufferDays = 7
+
+let isLeapYear = (year) => year % 4 === 0 && (year % 100 !== 0 || year % 400 === 0)
+
+// Reads a four digit YDDD batch code (last digit of the year, then day of the year) and works out when the batch was made and when it expires one year later. The year digit has no decade, so it is read as the latest year ending in that digit that is not in the future (a few days of clock allowance aside), which makes a date later this year with the same digit ten years ago. Returns null for an empty code, a code that is not YDDD, or day 366 of a year that is not a leap year, so such batches are never blocked or flagged. The expiry is the same calendar date one year later (29 February becomes 1 March), so it is never a day late.
+let parseBatchExpiry = (code, now = new Date()) => {
+	let match = /^(\d)(\d{3})$/.exec(code.trim())
+
+	if (match === null) return null
+
+	let yearDigit = Number(match[1])
+	let dayOfYear = Number(match[2])
+
+	if (dayOfYear < 1 || dayOfYear > 366) return null
+
+	let currentYear = now.getFullYear()
+	let todayMillis = Date.UTC(currentYear, now.getMonth(), now.getDate())
+	let currentDayOfYear = Math.round((todayMillis - Date.UTC(currentYear, 0, 1)) / millisPerDay) + 1
+	let yearsBack = (currentYear % 10 - yearDigit + 10) % 10
+	let productionYear = currentYear - yearsBack
+
+	if (yearsBack === 0 && dayOfYear > currentDayOfYear + batchFutureBufferDays) productionYear -= 10
+	if (yearsBack === 9 && (Date.UTC(currentYear + 1, 0, dayOfYear) - todayMillis) / millisPerDay <= batchFutureBufferDays) productionYear = currentYear + 1
+	if (dayOfYear === 366 && !isLeapYear(productionYear)) return null
+
+	let productionDate = new Date(productionYear, 0, dayOfYear)
+	let expiryDate = new Date(productionYear + 1, productionDate.getMonth(), productionDate.getDate())
+	let daysUntilExpiry = Math.round((Date.UTC(expiryDate.getFullYear(), expiryDate.getMonth(), expiryDate.getDate()) - todayMillis) / millisPerDay)
+
+	return {
+		prodDate: productionDate,
+		expiryDate: expiryDate,
+		daysUntilExpiry: daysUntilExpiry,
+		status: daysUntilExpiry <= 0 ? `expired` : daysUntilExpiry <= expiringSoonDays ? `expiringSoon` : `ok`
+	}
+}
+
+let makeExpiryDateText = (expiry) => expiry.expiryDate.toLocaleDateString(`en-AU`, {
+	day: `2-digit`,
+	month: `2-digit`,
+	year: `numeric`
+})
+
+// The warning wording for a batch, empty when it is not close to expiry. The detailed form says how long ago it expired.
+let makeExpiryStatusText = (expiry, isDetailed) => expiry === null || expiry.status === `ok` ? `` : expiry.status === `expired` ? (isDetailed && expiry.daysUntilExpiry < 0 ? `Expired ${-expiry.daysUntilExpiry}d ago` : `Expired`) : `Expires in ${expiry.daysUntilExpiry}d`
+
+// The note added after a batch in the stock text.
+let makeExpiryNoteText = (expiry) => expiry === null || expiry.status === `ok` ? `` : expiry.status === `expired` ? ` (EXPIRED)` : ` (expires in ${expiry.daysUntilExpiry}d)`
+
+let makeExpiryClassName = (status) => status === `expired` ? `expired` : status === `expiringSoon` ? `expiring-soon` : ``
+
+// The worst expiry status of any batch in a space: expired, expiringSoon, or empty when none is close to expiry.
+let determineSpaceExpiryStatus = (space, now = new Date()) => {
+	let statuses = space.entries.flatMap(entry => entry.batches.map(batch => parseBatchExpiry(batch.code, now))).filter(expiry => expiry !== null).map(expiry => expiry.status)
+
+	return statuses.includes(`expired`) ? `expired` : statuses.includes(`expiringSoon`) ? `expiringSoon` : ``
+}
+
+// The time of the oldest dated batch, or Infinity when none is dated, so products without dated batches sort last.
+let makeOldestBatchTime = (batches, now = new Date()) => Math.min(Infinity, ...batches.map(batch => parseBatchExpiry(batch.code, now)).filter(expiry => expiry !== null).map(expiry => expiry.prodDate.getTime()))
+
+// A sorted copy of the batches, oldest first. Batches without a valid YDDD code keep their order after the dated ones.
+let sortBatchesOldestFirst = (batches, now = new Date()) => {
+	let makeBatchTime = (batch) => {
+		let expiry = parseBatchExpiry(batch.code, now)
+
+		return expiry === null ? Infinity : expiry.prodDate.getTime()
+	}
+
+	return [...batches].sort((first, second) => makeBatchTime(first) === makeBatchTime(second) ? 0 : makeBatchTime(first) - makeBatchTime(second))
+}

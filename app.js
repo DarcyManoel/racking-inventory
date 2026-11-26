@@ -42,8 +42,11 @@ let renderSpaceTile = (space, onclickText, ariaLabel, searchClass) => {
 		return `<span class="space-line product">${makeSafeForHtml(findProduct(state, entry.productId).name)}</span>${batchLines}`
 	}).join(``)
 	let stateClass = determineSpaceStatus(space) === `empty` ? `empty` : space.isUnfinished === true ? `unfinished` : ``
+	let expiryStatus = determineSpaceExpiryStatus(space)
+	let expiryClass = expiryStatus === `expired` ? `has-expired` : expiryStatus === `expiringSoon` ? `has-expiring-soon` : ``
+	let expiryFlag = expiryClass === `` ? `` : `<span class="expiry-flag"></span>`
 
-	return `<button class="space-cell tone-${determineSpaceTone(state, space)} ${stateClass} ${searchClass || ``}" onclick="${onclickText}" aria-label="${makeSafeForHtml(ariaLabel)}"><span class="space-lines">${lines}</span></button>`
+	return `<button class="space-cell tone-${determineSpaceTone(state, space)} ${stateClass} ${expiryClass} ${searchClass || ``}" onclick="${onclickText}" aria-label="${makeSafeForHtml(ariaLabel)}"><span class="space-lines">${lines}</span>${expiryFlag}</button>`
 }
 
 // The overview cell of a rack or floor space. An unavailable location is drawn as an empty gap so the other spaces keep their positions.
@@ -162,10 +165,13 @@ let renderOverviewResults = () => {
 let renderOverviewTab = () => `<input class="search-input" type="search" id="search-input" placeholder="Search product or batch\u2026" autocomplete="off" value="${makeSafeForHtml(viewState.searchQuery)}" oninput="handleSearchInput(this.value)"><div id="overview-results">${renderOverviewResults()}</div>`
 
 // Products with stock come first, then a separate section for products in no space.
+// The expiry wording after a batch on the Stock tab, coloured by how close the expiry is, and nothing for a batch that is not close.
+let makeExpiryNoteHtml = (expiry) => makeExpiryStatusText(expiry, false) === `` ? `` : ` <span class="expiry-note ${makeExpiryClassName(expiry.status)}">${makeExpiryStatusText(expiry, false)}</span>`
+
 let renderStockTab = () => {
 	let summaries = summariseStock(state)
 	let stockedHtml = summaries.filter(hasStock).map(entry => {
-		let locations = entry.locations.map(location => `<li><strong>${makeSafeForHtml(location.label)}</strong><span${location.batches.length === 0 ? ` class="uncounted"` : ``}>${location.batches.length === 0 ? `not counted` : location.batches.map(batch => makeSafeForHtml(makeBatchText(batch, location.batches.length > 1))).join(`, `)}</span></li>`).join(``)
+		let locations = entry.locations.map(location => `<li><strong>${makeSafeForHtml(location.label)}</strong><span${location.batches.length === 0 ? ` class="uncounted"` : ``}>${location.batches.length === 0 ? `not counted` : sortBatchesOldestFirst(location.batches).map(batch => makeSafeForHtml(makeBatchText(batch, location.batches.length > 1)) + makeExpiryNoteHtml(parseBatchExpiry(batch.code))).join(`, `)}</span></li>`).join(``)
 		let uncounted = entry.uncountedSpaceCount > 0 ? `<p class="note uncounted">${makeSpaceCountText(entry.uncountedSpaceCount)} ${entry.uncountedSpaceCount === 1 ? `holds` : `hold`} this product with boxes not counted, so the total is a minimum.</p>` : ``
 
 		return `<article class="stock-entry"><h2>${makeSwatchHtml(entry.product)}${makeSafeForHtml(entry.product.name)}</h2><p class="stock-total">${makeBoxCountText(entry.totalBoxes)}</p>${uncounted}<ul>${locations}</ul></article>`
@@ -206,10 +212,17 @@ let renderSheet = () => {
 
 	let isFloor = isFloorLocation(location)
 	let space = getSpace(state, location)
+	let now = new Date()
 	let entryBlocks = space.entries.map(entry => {
 		let isEditing = viewState.editingProductId === entry.productId
 		let product = findProduct(state, entry.productId)
-		let batchLabel = (batch) => batch.code === `` ? `<span class="batch-code unbatched">(no batch)</span>` : `<span class="batch-code">${makeSafeForHtml(batch.code)}</span>`
+		let batchLabel = (batch) => {
+			let expiry = parseBatchExpiry(batch.code, now)
+			let statusText = makeExpiryStatusText(expiry, true)
+			let expiryLine = expiry === null ? `` : `<span class="batch-expiry ${makeExpiryClassName(expiry.status)}">Exp ${makeExpiryDateText(expiry)}${statusText === `` ? `` : ` \u00B7 ${statusText}`}</span>`
+
+			return batch.code === `` ? `<span class="batch-code unbatched">(no batch)</span>` : `<span class="batch-code">${makeSafeForHtml(batch.code)}${expiryLine}</span>`
+		}
 		let batchRows = entry.batches.map((batch, batchIndex) => isEditing ? `<li class="batch-row">${batchLabel(batch)}<button onclick="nudgeBatch(${entry.productId},${batchIndex},-1)" aria-label="Remove one box">\u2212</button><span class="batch-count">${batch.boxCount}</span><button onclick="nudgeBatch(${entry.productId},${batchIndex},1)" aria-label="Add one box">+</button><button class="danger" onclick="removeBatch(${entry.productId},${batchIndex})" aria-label="Delete batch">\u2715</button></li>` : `<li class="batch-row compact">${batchLabel(batch)}<span class="batch-count">${batch.boxCount}</span></li>`).join(``)
 		let uncounted = entry.batches.length === 0 ? `<p class="note">No batches yet, so the box count is unknown.</p>` : ``
 		let actions = isEditing ? `<button onclick="finishEntryEdit()">Done</button><button class="danger" onclick="removeEntryConfirm(${entry.productId})">Remove</button>` : `<button onclick="startEntryEdit(${entry.productId})">Edit</button>`

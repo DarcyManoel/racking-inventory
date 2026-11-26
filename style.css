@@ -365,6 +365,7 @@ main {
 	justify-content: flex-start;
 	min-height: 0;
 	padding: 4px;
+	position: relative;
 	text-align: left;
 
 	&.tone-brown {
@@ -428,6 +429,25 @@ main {
 
 	&.search-dimmed {
 		opacity: 0.25;
+	}
+
+	/* A small dot in the corner of a cell that holds an expired batch (red) or one expiring within about three months (amber). It is a real element, because the dashed border of a mixed colour unfinished cell already uses both pseudo elements. */
+	>.expiry-flag {
+		border-radius: 50%;
+		box-shadow: 0 0 0 2px var(--colour-background);
+		height: 10px;
+		position: absolute;
+		right: 4px;
+		top: 4px;
+		width: 10px;
+	}
+
+	&.has-expired>.expiry-flag {
+		background: var(--colour-danger);
+	}
+
+	&.has-expiring-soon>.expiry-flag {
+		background: var(--colour-warning);
 	}
 
 	&.add-tile {
@@ -504,6 +524,18 @@ main {
 				}
 			}
 		}
+	}
+}
+
+.expiry-note {
+	font-weight: 600;
+
+	&.expired {
+		color: var(--colour-danger);
+	}
+
+	&.expiring-soon {
+		color: var(--colour-warning);
 	}
 }
 
@@ -763,6 +795,23 @@ main {
 					&.unbatched {
 						color: var(--colour-muted);
 						font-weight: 400;
+					}
+
+					>.batch-expiry {
+						color: var(--colour-muted);
+						display: block;
+						font-size: 12px;
+						font-weight: 400;
+
+						&.expired {
+							color: var(--colour-danger);
+							font-weight: 600;
+						}
+
+						&.expiring-soon {
+							color: var(--colour-warning);
+							font-weight: 600;
+						}
 					}
 				}
 
